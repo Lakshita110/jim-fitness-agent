@@ -1,5 +1,5 @@
--- Vesper initial schema (PLAN.md §6). Additive and idempotent: safe to re-run.
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Vesper core schema (PLAN.md §6). Additive and idempotent: safe to re-run.
+-- pgvector-dependent tables live in 002_research_corpus.sql.
 
 CREATE TABLE IF NOT EXISTS garmin_daily (
     day             date PRIMARY KEY,
@@ -56,13 +56,4 @@ CREATE TABLE IF NOT EXISTS outcomes (
     adhered              boolean,
     notes                text NOT NULL DEFAULT '',
     reconciled_ts        timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS research_corpus (
-    id          serial PRIMARY KEY,
-    source      text NOT NULL,
-    title       text NOT NULL,
-    chunk_text  text NOT NULL,
-    embedding   vector(1536),
-    tags        text[] NOT NULL DEFAULT '{}'
 );

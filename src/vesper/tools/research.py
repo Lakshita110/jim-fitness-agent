@@ -16,6 +16,38 @@ EMBEDDING_MODEL = "openai/text-embedding-3-small"  # 1536 dims, matches schema
 CORPUS_K = 3
 TAVILY_K = 2
 
+CHUNK_MAX_CHARS = 1500
+CHUNK_MIN_CHARS = 200
+
+
+def chunk_text(text: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str]:
+    """Split a document into chunks along paragraph boundaries.
+
+    Pure function (unit-tested; no I/O). Paragraphs are packed greedily up to
+    `max_chars`; a paragraph longer than the cap is split hard. Tiny trailing
+    chunks are merged into the previous one so no chunk is near-empty."""
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    chunks: list[str] = []
+    current = ""
+    for para in paragraphs:
+        while len(para) > max_chars:  # pathological paragraph: hard split
+            head, para = para[:max_chars], para[max_chars:]
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(head)
+        if current and len(current) + len(para) + 2 > max_chars:
+            chunks.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current:
+        if chunks and len(current) < CHUNK_MIN_CHARS:
+            chunks[-1] = f"{chunks[-1]}\n\n{current}"
+        else:
+            chunks.append(current)
+    return chunks
+
 
 def _embed(text: str) -> list[float]:
     from openai import OpenAI
