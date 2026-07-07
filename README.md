@@ -7,7 +7,7 @@ structured workouts to Garmin Connect on approval.
 
 Full design: [PLAN.md](PLAN.md). Milestone status:
 
-- [ ] **M1** — Garmin write round-trip (`scripts/m1_roundtrip.py`, needs real creds/watch)
+- [x] **M1** — Garmin write round-trip: verified server-side (docs/garmin_strength.md); awaiting on-watch visual confirmation
 - [x] **M2** — State layer as tools (`vesper/tools/`, fixture-tested, `scripts/backfill.py`)
 - [x] **M3** — Bounded agent loop, propose-only (`vesper/agent/loop.py`) + morning reconcile
 - [x] **M4** — Gated research + tier escalation (`vesper/tools/research.py`, `agent/heuristics.py`)
