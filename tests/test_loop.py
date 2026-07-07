@@ -131,3 +131,19 @@ def test_tool_budget_is_enforced():
     rec = Recorder()
     with pytest.raises(ToolBudgetExceeded):
         run_agent(TODAY, tools=rec.toolbox(), max_tool_calls=2)
+
+
+def test_base_template_schedules_by_id_without_rebuild(monkeypatch):
+    # When the agent selects a base workout (garmin_workout_id set) and auto-push
+    # is on, the loop schedules the existing Garmin workout — never rebuilds it.
+    import vesper.agent.loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "AUTO_PUSH", True)
+    scheduled: list = []
+    selected = sane_session(TOMORROW, garmin_workout_id="1414015802", template_key="full_body_b")
+    rec = Recorder(compose_outputs=[selected])
+    tb = rec.toolbox()
+    tb.schedule_workout = lambda wid, on: scheduled.append((wid, on))
+    # create_garmin_workout still raises if called — proves no rebuild happened
+    run_agent(TODAY, tools=tb)
+    assert scheduled == [("1414015802", TOMORROW)]

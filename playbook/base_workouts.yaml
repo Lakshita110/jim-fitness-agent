@@ -1,0 +1,100 @@
+# Base strength workouts — the A/B/C rotation, captured from Garmin Connect.
+# These already exist as structured workouts on the watch (garmin_workout_id),
+# so the agent schedules the existing workout by ID on a lifting day rather than
+# rebuilding it — your loaded weights and exact exercise selection are preserved.
+# Edit reps/exercises here to keep the agent's understanding in sync, but the
+# Garmin workout is the source of truth for what actually lands on the watch.
+
+rotation: [full_body_a, full_body_b, full_body_c]   # cycle in this order
+
+workouts:
+  full_body_a:
+    label: "Full Body A"
+    garmin_workout_id: "1414012813"
+    sport: strength_training
+    warmup:
+      - {name: "Band pull-apart", reps: 20}
+      - {name: "Ankle dorsiflexion with band", reps: 10}
+      - {name: "Cardio", time_sec: 300}
+    blocks:   # each block is done as 3 rounds unless sets given
+      - sets: 3
+        exercises:
+          - {name: "Goblet squat", reps: 12}
+          - {name: "Banded pull-ups", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Dumbbell bench press", reps: 10}
+          - {name: "Straight-arm pulldown", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Romanian deadlift", reps: 8}
+          - {name: "Cable core press", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Standing calf raise", reps: 10}
+          - {name: "Leg extension — 90° isometric hold", time_sec: 60}
+      - sets: 3
+        exercises:
+          - {name: "Dead bug", reps: 10}
+          - {name: "Farmer's carry", time_sec: 60}
+
+  full_body_b:
+    label: "Full Body B"
+    garmin_workout_id: "1414015802"
+    sport: strength_training
+    warmup:
+      - {name: "Band pull-apart", reps: 10}
+      - {name: "Ankle dorsiflexion with band", reps: 10}
+      - {name: "Cardio", time_sec: 300}
+    blocks:
+      - sets: 3
+        exercises:
+          - {name: "Banded glute bridge", reps: 10}
+          - {name: "Seated dumbbell shoulder press", reps: 8}
+      - sets: 3
+        exercises:
+          - {name: "Lat pulldown", reps: 8}
+          - {name: "Seated barbell overhead triceps extension", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Single-leg Romanian deadlift with dumbbell", reps: 8}
+          - {name: "Leg extension — 60° isometric hold", time_sec: 60}
+      - sets: 3
+        exercises:
+          - {name: "Kneeling rear flye", reps: 12}
+          - {name: "Face pull", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Cable woodchop", reps: 10}
+          - {name: "Good morning", reps: 10}
+
+  full_body_c:
+    label: "Full Body C"
+    garmin_workout_id: "1414019198"
+    sport: strength_training
+    warmup:
+      - {name: "Band pull-apart", reps: 10}
+      - {name: "Ankle dorsiflexion with band", reps: 10}
+      - {name: "Cardio", time_sec: 300}
+    blocks:
+      - sets: 3
+        exercises:
+          - {name: "Dumbbell step-up", reps: 12}
+          - {name: "Push-up", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Single-arm dumbbell bench press", reps: 8}
+          - {name: "Single-arm neutral-grip dumbbell row", reps: 8}
+      - sets: 3
+        exercises:
+          - {name: "Leg curl", reps: 12}
+          - {name: "Barbell biceps curl", reps: 10}
+      - sets: 3
+        exercises:
+          - {name: "Single-leg standing dumbbell calf raise (3s eccentric)", reps: 10}
+          - {name: "Leg extension — 90° isometric hold", time_sec: 60}
+      - sets: 3
+        exercises:
+          - {name: "Side plank", time_sec: 30}
+          - {name: "Wall slide", reps: 10}
+          - {name: "Plank", reps: 10}

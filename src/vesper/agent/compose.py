@@ -25,7 +25,14 @@ from vesper.schemas import (
 SYSTEM_PROMPT = """You are a careful strength & conditioning coach for a single athlete
 with knee and ankle constraints. Propose ONE session for tomorrow as JSON only.
 
-Hard rules:
+You are given the athlete's PLAYBOOK: their base A/B/C strength rotation, two PT
+routines, and standing directives. PREFER selecting a base template unchanged —
+when you do, copy its garmin_workout_id and template_key into your response and
+leave `steps` empty (the existing Garmin workout will be scheduled as-is, with
+its loaded weights). Only hand-build `steps` when pain/recovery forces you to
+adapt or substitute.
+
+Hard rules (never violate; the playbook directives sit below these):
 - Never program: {forbidden}.
 - Keep the session under {max_min} minutes.
 - Leg sessions need at least {leg_gap} days since the last leg session.
@@ -34,7 +41,7 @@ Hard rules:
 
 Respond with a single JSON object matching:
 {{"for_date": "YYYY-MM-DD", "kind": "strength|conditioning|mobility|rest",
-  "title": str,
+  "title": str, "template_key": str|null, "garmin_workout_id": str|null,
   "steps": [{{"exercise": str, "sets": int, "reps": int|null,
              "duration_sec": int|null, "weight_kg": float|null, "notes": str}}],
   "est_duration_min": float, "rationale_summary": str}}"""
@@ -47,6 +54,7 @@ def build_user_prompt(
     features: HistoryFeatures,
     research: list[ResearchHit],
     revision_feedback: list[str] | None = None,
+    playbook_text: str = "",
 ) -> str:
     parts = [
         f"Propose the session for {for_date.isoformat()}.",
@@ -54,6 +62,8 @@ def build_user_prompt(
         f"Today (log): {notion.model_dump_json()}",
         f"History features: {features.model_dump_json()}",
     ]
+    if playbook_text:
+        parts.append("# PLAYBOOK\n" + playbook_text)
     if research:
         parts.append(
             "Research snippets:\n"
@@ -75,6 +85,7 @@ def compose_session(
     research: list[ResearchHit],
     model: str,
     revision_feedback: list[str] | None = None,
+    playbook_text: str = "",
 ) -> StructuredSession:
     from openai import OpenAI
 
@@ -94,7 +105,8 @@ def compose_session(
             {
                 "role": "user",
                 "content": build_user_prompt(
-                    for_date, garmin, notion, features, research, revision_feedback
+                    for_date, garmin, notion, features, research,
+                    revision_feedback, playbook_text,
                 ),
             },
         ],

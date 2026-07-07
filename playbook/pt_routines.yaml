@@ -1,0 +1,77 @@
+# PT routines for the in-between (non-lifting) days. Two variants — pick by
+# where the athlete is that day (see directives.md: home vs gym selection).
+# Exercises carry tags the agent honors:
+#   priority  — do first, don't drop (lateral ankle pain driver)
+#   skip_on_flare — omit when flare mode / pain elevated
+#   equipment — what's needed (drives the home vs gym choice)
+# The gym variant matches the existing Garmin "PT Routine" (garmin_workout_id);
+# the home variant has no Garmin workout yet (propose-only, or create on demand).
+
+routines:
+  pt_home:
+    label: "PT Day · Home"
+    garmin_workout_id: null
+    sport: mobility
+    equipment: [ankle weights, heavy small band, towel, chair, step, mat]
+    warmup:
+      - {name: "Seated marching + ankle circles", time_sec: 300}
+    blocks:
+      - group: "A · Tendon + Quad"
+        exercises:
+          - {name: "Wall sit (shallow, ~60°)", sets: 5, time_sec: 40, tags: [iso_anchor]}
+          - {name: "Quad sets", sets: 2, reps: 10}
+          - {name: "Short arc quad", sets: 3, reps: 15, equipment: [ankle weights]}
+          - {name: "Straight-leg raise", sets: 3, reps: 12, equipment: [ankle weights]}
+          - {name: "Step-down", sets: 3, reps: 10, tags: [skip_on_flare]}
+      - group: "B · Hip"
+        exercises:
+          - {name: "Single-leg bridge", sets: 3, reps: 10, equipment: [ankle weights]}
+          - {name: "Resisted clamshell", sets: 3, reps: 15, equipment: [heavy small band]}
+          - {name: "Lateral band walk", sets: 2, reps: 15, tags: [skip_on_flare], equipment: [band]}
+          - {name: "Hip controlled articular rotations", sets: 2, reps: 10, equipment: [ankle weights]}
+          - {name: "Glute bridge (double-leg)", sets: 3, reps: 15, equipment: [ankle weights]}
+      - group: "C · Ankle"
+        exercises:
+          - {name: "Seated foot eversion", sets: 3, reps: 15, tags: [priority], equipment: [ankle weights]}
+          - {name: "Seated toe raise (dorsiflexion)", sets: 3, reps: 15, equipment: [ankle weights]}
+          - {name: "Eccentric calf raise (3s lower)", sets: 3, reps: 12}
+          - {name: "Single-leg reach (fwd + back only)", sets: 1, reps: 3}
+      - group: "Cool-down"
+        exercises:
+          - {name: "Hip flexor stretch (kneeling)", sets: 2, time_sec: 45}
+
+  pt_gym:
+    label: "PT Day · Gym"
+    garmin_workout_id: "1414026633"
+    sport: mobility
+    equipment: [long band, small band, bike, rower, back extension machine, ladder anchor]
+    warmup:
+      - {name: "Seated bike, low resistance", time_sec: 480}
+    blocks:
+      - group: "A · Tendon + Quad"
+        exercises:
+          - {name: "Wall sit (shallow, ~60°)", sets: 5, time_sec: 40, tags: [iso_anchor]}
+          - {name: "Spanish squat (long band)", sets: 5, time_sec: 40, tags: [iso_anchor], equipment: [long band]}
+          - {name: "Quad sets", sets: 2, reps: 10}
+          - {name: "Terminal knee extension", sets: 3, reps: 15, equipment: [long band]}
+          - {name: "Straight-leg raise", sets: 3, reps: 12}
+          - {name: "Step-down", sets: 3, reps: 10, tags: [skip_on_flare]}
+      - group: "B · Hip"
+        exercises:
+          - {name: "Single-leg bridge", sets: 3, reps: 10}
+          - {name: "Resisted side-plank clamshell", sets: 3, reps: 10, equipment: [small band]}
+          - {name: "Hip controlled articular rotations", sets: 2, reps: 10}
+          - {name: "Back extension", sets: 3, reps: 12, equipment: [back extension machine]}
+      - group: "C · Ankle"
+        exercises:
+          - {name: "Banded eversion", sets: 3, reps: 15, tags: [priority], equipment: [small band]}
+          - {name: "Banded dorsiflexion", sets: 3, reps: 15, equipment: [small band]}
+          - {name: "Eccentric calf raise (3s lower)", sets: 3, reps: 12}
+          - {name: "Single-leg reach (fwd + back only)", sets: 1, reps: 3}
+          - {name: "Lateral band walk", sets: 2, reps: 15, tags: [skip_on_flare], equipment: [band]}
+      - group: "Cool-down"
+        exercises:
+          - {name: "Hip flexor stretch (kneeling)", sets: 2, time_sec: 45}
+      - group: "Cardio"
+        exercises:
+          - {name: "Bike (high seat) or rower (knee <90°), Zone 2", time_sec: 900}

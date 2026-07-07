@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vesper.agent import compose, heuristics, validate
 from vesper.config import (
@@ -21,6 +21,9 @@ from vesper.config import (
     RESEARCH_ENABLED,
 )
 from vesper.schemas import ResearchHit, StructuredSession
+
+if TYPE_CHECKING:
+    from vesper.playbook import Playbook
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +79,12 @@ def run_agent(
     today: date,
     tools: Toolbox | None = None,
     max_tool_calls: int = MAX_TOOL_CALLS,
+    playbook: "Playbook | None" = None,
 ) -> RunReport:
+    from vesper.playbook import load_playbook
+
     tools = tools or Toolbox.live()
+    playbook = playbook if playbook is not None else load_playbook()
     tomorrow = today + timedelta(days=1)
     report = RunReport(for_date=tomorrow)
 
@@ -113,10 +120,11 @@ def run_agent(
         report.tier = "quality"
     log.info("composing on %s (off: %s)", model, report.off_reasons or "nothing")
 
-    # 5-6. Compose, then deterministic guardrail with one revision, then fallback.
+    # 5-6. Compose (playbook in context), guardrail with one revision, then fallback.
+    playbook_text = playbook.to_prompt()
     session = call(
         tools.compose_session, tomorrow, garmin_today, notion_day, features, research,
-        model=model,
+        model=model, playbook_text=playbook_text,
     )
     result = validate.validate(session, features)
     if not result.ok:
@@ -124,6 +132,7 @@ def run_agent(
         session = call(
             tools.compose_session, tomorrow, garmin_today, notion_day, features,
             research, model=model, revision_feedback=result.violations,
+            playbook_text=playbook_text,
         )
         result = validate.validate(session, features)
     if not result.ok:
@@ -144,8 +153,13 @@ def run_agent(
 
     # Auto-push stays off until the M5 eval suite gates it green.
     if AUTO_PUSH and session.kind != "rest" and not report.fell_back:
-        ref = call(tools.create_garmin_workout, session)
-        call(tools.schedule_workout, ref.workout_id, tomorrow)
+        if session.garmin_workout_id:
+            # Base template selected unchanged: schedule the existing Garmin
+            # workout by ID (keeps loaded weights) — no rebuild.
+            call(tools.schedule_workout, session.garmin_workout_id, tomorrow)
+        else:
+            ref = call(tools.create_garmin_workout, session)
+            call(tools.schedule_workout, ref.workout_id, tomorrow)
 
     log.info(
         "run complete: suggestion %s for %s (%s tool calls, tier=%s)",

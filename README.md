@@ -32,7 +32,9 @@ src/vesper/
     validate.py      # deterministic guardrail + conservative fallback
     loop.py          # run_agent: bounded, injectable toolbox
   jobs/              # nightly run + morning reconcile (Render Cron entrypoints)
+  playbook.py        # loads playbook/ (base workouts + PT + directives) into context
   app.py             # thin FastAPI (health + manual trigger)
+playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
 migrations/          # additive, idempotent SQL (PLAN §6)
 scripts/             # m1_roundtrip.py (live), backfill.py (live)
 evals/               # M5 scaffold: plan quality / tool use / cost

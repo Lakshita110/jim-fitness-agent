@@ -75,6 +75,11 @@ class StructuredSession(BaseModel):
     steps: list[ExerciseStep] = []
     est_duration_min: float = Field(default=0.0, ge=0)
     rationale_summary: str = ""
+    # When the agent selects a base template unchanged, it returns that
+    # template's Garmin workout ID so the loop schedules the existing workout
+    # (preserving loaded weights) instead of rebuilding it from `steps`.
+    garmin_workout_id: str | None = None
+    template_key: str | None = None
 
 
 class ResearchHit(BaseModel):
