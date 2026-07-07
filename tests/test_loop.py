@@ -52,7 +52,7 @@ class Recorder:
             self._compose_i += 1
             return out
 
-        def write_notion(for_date, plan, rationale):
+        def write_notion(for_date, plan, rationale, research_used=False):
             self.calls.append("write_notion")
             self.written = (for_date, plan, rationale)
 

@@ -43,9 +43,11 @@ class Settings(BaseSettings):
     garmin_password: str = ""
 
     notion_token: str = ""
-    notion_knee_log_db_id: str = ""
-    notion_tasks_db_id: str = ""
-    notion_proposal_db_id: str = ""
+    # Real database IDs discovered from the workspace (overridable via env):
+    # "habits db", "tasks ", and the "training proposals" DB under the habits page.
+    notion_knee_log_db_id: str = "b872f62a28604573980e983be6fd3143"
+    notion_tasks_db_id: str = "6843311f33194f40b65ea7e7c0f47436"
+    notion_proposal_db_id: str = "67d2cfc3c75442c4b373736ad38b1cda"
 
     openrouter_api_key: str = ""
     tavily_api_key: str = ""

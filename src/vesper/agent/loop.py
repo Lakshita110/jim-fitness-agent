@@ -136,7 +136,7 @@ def run_agent(
     rationale = session.rationale_summary
     if report.off_reasons:
         rationale += f" [flags: {'; '.join(report.off_reasons)}]"
-    call(tools.write_notion, tomorrow, session, rationale)
+    call(tools.write_notion, tomorrow, session, rationale, research_used=report.research_used)
     report.suggestion_id = call(
         tools.record_suggestion, tomorrow, session, rationale,
         report.research_used, report.tier,

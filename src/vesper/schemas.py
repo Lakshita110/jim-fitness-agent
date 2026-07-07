@@ -38,6 +38,7 @@ class NotionDay(BaseModel):
     day: date
     pain_level: int | None = None  # 0-10
     pain_location: str = ""
+    pain_notes: str = ""
     pt_done: bool = False
     habits: dict[str, bool] = {}
     day_score: int | None = None

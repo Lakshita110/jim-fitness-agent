@@ -1,16 +1,25 @@
 {
   "object": "page",
-  "id": "fixture-knee-log-page",
+  "id": "fixture-habits-db-page",
   "properties": {
-    "Date": {"type": "date", "date": {"start": "2026-07-06"}},
-    "Pain Level": {"type": "number", "number": 4},
-    "Pain Location": {
-      "type": "select",
-      "select": {"name": "Left knee (medial)"}
+    "name": {
+      "type": "title",
+      "title": [{"plain_text": "@July 6, 2026 - habit journal"}]
     },
-    "PT Done": {"type": "checkbox", "checkbox": true},
-    "Stretching": {"type": "checkbox", "checkbox": true},
-    "Reading": {"type": "checkbox", "checkbox": false},
-    "Day Score": {"type": "number", "number": 7}
+    "date": {"type": "date", "date": {"start": "2026-07-06"}},
+    "pain level": {"type": "number", "number": null},
+    "knee pain": {
+      "type": "multi_select",
+      "multi_select": [{"name": "right"}, {"name": "ankles"}, {"name": "mild"}]
+    },
+    "pain location": {"type": "select", "select": {"name": "right"}},
+    "pain notes": {"type": "rich_text", "rich_text": [{"plain_text": "sore after stairs"}]},
+    "physical therapy": {"type": "checkbox", "checkbox": true},
+    "strength training": {"type": "checkbox", "checkbox": true},
+    "cardio": {"type": "checkbox", "checkbox": false},
+    "reading": {"type": "checkbox", "checkbox": true},
+    "vitamins": {"type": "checkbox", "checkbox": false},
+    "dental care": {"type": "checkbox", "checkbox": false},
+    "day score": {"type": "formula", "formula": {"type": "number", "number": 7}}
   }
 }

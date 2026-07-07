@@ -13,9 +13,10 @@ Full design: [PLAN.md](PLAN.md). Milestone status:
 - [x] **M4** — Gated research + tier escalation (`vesper/tools/research.py`, `agent/heuristics.py`)
 - [ ] **M5** — Eval suite gating `AUTO_PUSH` (`evals/run_evals.py` scaffold; needs live-compose scenarios)
 
-M2–M4 are implemented and unit-tested offline; the live integrations (Garmin
-auth + strength JSON, Notion schema mapping, backfill) still need to be
-verified against real accounts — M1 is deliberately the first thing to run.
+M2–M4 are implemented and unit-tested offline; the Notion schema mapping is
+wired to the real workspace databases (see `docs/notion_schema.md`), while the
+Garmin live path (auth + strength JSON, backfill) still needs verification —
+M1 is deliberately the first thing to run.
 
 ## Layout
 
