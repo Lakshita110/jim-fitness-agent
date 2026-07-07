@@ -158,6 +158,20 @@ def test_checkin_is_read_for_tomorrow_and_passed_to_compose():
     assert seen["checkin"].location == "home"
 
 
+def test_plan_for_today_targets_today_everywhere():
+    # The morning re-plan runs the same loop with plan_for=today: the check-in,
+    # compose target, Notion proposal, and suggestion must all be dated today.
+    rec = Recorder(compose_outputs=[sane_session(TODAY)])
+    tb = rec.toolbox()
+    checkin_days: list = []
+    tb.get_checkin = lambda d: (checkin_days.append(d), rec._checkin)[1]
+    report = run_agent(TODAY, tools=tb, plan_for=TODAY)
+    assert report.for_date == TODAY
+    assert checkin_days == [TODAY]
+    assert rec.written[0] == TODAY
+    assert rec.recorded[0] == TODAY
+
+
 def test_base_template_schedules_by_id_without_rebuild(monkeypatch):
     # When the agent selects a base workout (garmin_workout_id set) and auto-push
     # is on, the loop schedules the existing Garmin workout — never rebuilds it.

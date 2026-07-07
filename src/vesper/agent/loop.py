@@ -82,13 +82,16 @@ def run_agent(
     tools: Toolbox | None = None,
     max_tool_calls: int = MAX_TOOL_CALLS,
     playbook: "Playbook | None" = None,
+    plan_for: date | None = None,
 ) -> RunReport:
+    """Plan the session for `plan_for` (default: tomorrow — the nightly run).
+    The morning re-plan passes plan_for=today when a late check-in arrives."""
     from vesper.playbook import load_playbook
 
     tools = tools or Toolbox.live()
     playbook = playbook if playbook is not None else load_playbook()
-    tomorrow = today + timedelta(days=1)
-    report = RunReport(for_date=tomorrow)
+    target = plan_for or (today + timedelta(days=1))
+    report = RunReport(for_date=target)
 
     calls = 0
 
@@ -104,15 +107,15 @@ def run_agent(
     garmin_today = call(tools.get_garmin_today, today)
     notion_day = call(tools.get_notion_logs, today)
     features = call(tools.query_history, today)
-    # The athlete's own input for tomorrow (empty CheckIn if none written).
-    checkin = call(tools.get_checkin, tomorrow)
+    # The athlete's own input for the target day (empty CheckIn if none written).
+    checkin = call(tools.get_checkin, target)
 
     # 4. Gated research: only when the deterministic heuristic says something's off.
     report.off_reasons = heuristics.something_off(garmin_today, notion_day, features)
     research: list[ResearchHit] = []
     if RESEARCH_ENABLED and report.off_reasons:
         question = (
-            "Training adjustment for tomorrow given: " + "; ".join(report.off_reasons)
+            "Training adjustment for the next session given: " + "; ".join(report.off_reasons)
         )
         research = call(tools.research_training, question)
         report.research_used = True
@@ -127,14 +130,14 @@ def run_agent(
     # 5-6. Compose (playbook in context), guardrail with one revision, then fallback.
     playbook_text = playbook.to_prompt()
     session = call(
-        tools.compose_session, tomorrow, garmin_today, notion_day, features, research,
+        tools.compose_session, target, garmin_today, notion_day, features, research,
         model=model, playbook_text=playbook_text, checkin=checkin,
     )
     result = validate.validate(session, features)
     if not result.ok:
         log.warning("proposal rejected: %s — revising once", result.violations)
         session = call(
-            tools.compose_session, tomorrow, garmin_today, notion_day, features,
+            tools.compose_session, target, garmin_today, notion_day, features,
             research, model=model, revision_feedback=result.violations,
             playbook_text=playbook_text, checkin=checkin,
         )
@@ -149,9 +152,9 @@ def run_agent(
     rationale = session.rationale_summary
     if report.off_reasons:
         rationale += f" [flags: {'; '.join(report.off_reasons)}]"
-    call(tools.write_notion, tomorrow, session, rationale, research_used=report.research_used)
+    call(tools.write_notion, target, session, rationale, research_used=report.research_used)
     report.suggestion_id = call(
-        tools.record_suggestion, tomorrow, session, rationale,
+        tools.record_suggestion, target, session, rationale,
         report.research_used, report.tier,
     )
 
@@ -160,13 +163,13 @@ def run_agent(
         if session.garmin_workout_id:
             # Base template selected unchanged: schedule the existing Garmin
             # workout by ID (keeps loaded weights) — no rebuild.
-            call(tools.schedule_workout, session.garmin_workout_id, tomorrow)
+            call(tools.schedule_workout, session.garmin_workout_id, target)
         else:
             ref = call(tools.create_garmin_workout, session)
-            call(tools.schedule_workout, ref.workout_id, tomorrow)
+            call(tools.schedule_workout, ref.workout_id, target)
 
     log.info(
         "run complete: suggestion %s for %s (%s tool calls, tier=%s)",
-        report.suggestion_id, tomorrow, report.tool_calls, report.tier,
+        report.suggestion_id, target, report.tool_calls, report.tier,
     )
     return report

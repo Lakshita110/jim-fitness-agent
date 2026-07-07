@@ -17,7 +17,7 @@ the severity word in `knee pain` (none=0, mild=2, moderate=5, severe=8) so the
 off-heuristic always has a number to work with."""
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from vesper.config import settings
@@ -118,6 +118,7 @@ def parse_task_page(page: dict[str, Any]) -> str:
 
 def parse_checkin_page(page: dict[str, Any], day: date) -> CheckIn:
     minutes = _number(page, "minutes")
+    edited_raw = page.get("last_edited_time")
     return CheckIn(
         for_date=day,
         note=_text(page, "note"),
@@ -125,6 +126,11 @@ def parse_checkin_page(page: dict[str, Any], day: date) -> CheckIn:
         location=_text(page, "location"),
         minutes=int(minutes) if minutes is not None else None,
         energy=_text(page, "energy"),
+        edited_ts=(
+            datetime.fromisoformat(edited_raw.replace("Z", "+00:00"))
+            if edited_raw
+            else None
+        ),
     )
 
 

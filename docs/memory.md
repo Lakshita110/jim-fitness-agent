@@ -51,6 +51,14 @@ context as a strong preference (honored unless it breaks a hard rule or the pain
 guardrail). Everything's optional — a blank or missing check-in just means
 "decide for me." There's a seeded example row you can edit or delete.
 
+**Checking in the morning works too.** The morning job compares the check-in's
+Notion `last_edited_time` against last night's proposal: if you wrote or edited
+today's check-in *after* the nightly run (e.g. over coffee), it re-plans today
+around it — new proposal in Notion and, once auto-push is on, the day's stale
+schedule is swapped for the new one. A check-in the agent already saw last
+night doesn't trigger anything. Practical cutoff: the check-in must be in
+before the morning cron fires (see render.yaml; ~7-8am local by default).
+
 ## 2. Episodic memory — what actually happened (Postgres)
 
 `suggestions` + `outcomes` (PLAN.md §6). Each night's proposal is recorded; the

@@ -50,6 +50,8 @@ preferences/pain), `focus` (select: no preference/upper/lower/full body/
 conditioning/pt only/rest), `location` (select: gym/home), `minutes` (number),
 `energy` (select: low/normal/high). The nightly run reads the row dated
 *tomorrow*; all fields optional. Home vs gym `location` selects the PT variant.
+The morning job re-reads today's row and re-plans if its `last_edited_time` is
+newer than last night's proposal (morning check-ins are honored, not dropped).
 
 ## Remaining runtime setup
 

@@ -19,6 +19,9 @@ services:
     envVars:
       - fromGroup: vesper-secrets
 
+  # Morning job: reconciles yesterday's adherence AND re-plans today if a
+  # check-in was written after the nightly run. Morning check-ins must land
+  # before this fires — push the schedule later if you check in later.
   - type: cron
     name: vesper-reconcile
     runtime: python

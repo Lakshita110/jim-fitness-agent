@@ -257,3 +257,18 @@ def schedule_workout(workout_id: str, on: date) -> None:
     api = client()
     api.schedule_workout(workout_id, on.isoformat())
     log.info("scheduled workout %s for %s", workout_id, on)
+
+
+def clear_schedule(on: date) -> None:
+    """Unschedule every planned (not completed) workout on `on`.
+
+    Used by the morning re-plan before pushing a replacement, so a stale
+    nightly schedule doesn't sit next to the new one. Only touches calendar
+    items of type 'workout' — recorded activities are untouched."""
+    api = client()
+    calendar = api.get_scheduled_workouts(on.year, on.month) or {}
+    for item in calendar.get("calendarItems", []):
+        if item.get("itemType") == "workout" and item.get("date") == on.isoformat():
+            api.unschedule_workout(item["id"])
+            log.info("unscheduled stale workout %s (%s) on %s", item.get("id"),
+                     item.get("title"), on)

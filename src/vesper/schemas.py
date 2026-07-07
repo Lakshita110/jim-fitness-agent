@@ -4,7 +4,7 @@ Every tool returns one of these compact models — never raw API payloads.
 Raw payloads are persisted to the `raw JSON` columns instead so features can
 be recomputed without re-fetching."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -56,6 +56,9 @@ class CheckIn(BaseModel):
     location: str = ""  # gym / home — drives the PT variant
     minutes: int | None = None  # time available
     energy: str = ""  # low / normal / high
+    # Notion last_edited_time — lets the morning job detect a check-in written
+    # or changed AFTER the nightly proposal, which triggers a same-day re-plan.
+    edited_ts: datetime | None = None
 
     def is_empty(self) -> bool:
         return not any(
