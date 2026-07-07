@@ -71,30 +71,90 @@ def get_garmin_today(day: date) -> GarminToday:
     )
 
 
+# Garmin's fixed exercise taxonomy (FIT SDK enums). Substring -> (category,
+# exerciseName). Unmapped movements omit category and rely on the description;
+# free-text categories are rejected with "Invalid category". Order matters:
+# first match wins, so specific entries go before generic ones.
+EXERCISE_TAXONOMY: tuple[tuple[str, str, str | None], ...] = (
+    ("goblet squat", "SQUAT", "GOBLET_SQUAT"),
+    ("squat", "SQUAT", None),
+    ("romanian deadlift", "DEADLIFT", "ROMANIAN_DEADLIFT"),
+    ("deadlift", "DEADLIFT", None),
+    ("calf raise", "CALF_RAISE", None),
+    ("side plank", "PLANK", "SIDE_PLANK"),
+    ("plank", "PLANK", None),
+    ("lunge", "LUNGE", None),
+    ("bench press", "BENCH_PRESS", None),
+    ("row", "ROW", None),
+    ("curl", "CURL", None),
+    ("pull-up", "PULL_UP", None),
+    ("pull up", "PULL_UP", None),
+    ("push-up", "PUSH_UP", None),
+    ("push up", "PUSH_UP", None),
+)
+
+
+def classify_garmin_exercise(name: str) -> tuple[str | None, str | None]:
+    lowered = name.lower()
+    for needle, category, exercise_name in EXERCISE_TAXONOMY:
+        if needle in lowered:
+            return category, exercise_name
+    return None, None
+
+
 def build_strength_payload(session: StructuredSession) -> dict[str, Any]:
     """Best-guess Garmin workout-API JSON for a strength session (M1 unknown).
 
     Cardio has typed helpers in garminconnect; strength needs a hand-built
     payload. Verify against a real account and update docs/garmin_strength.md."""
-    steps = []
-    for i, step in enumerate(session.steps, start=1):
-        end_condition = (
-            {"conditionTypeKey": "reps", "conditionValue": step.reps}
-            if step.reps
-            else {"conditionTypeKey": "time", "conditionValue": step.duration_sec or 60}
-        )
-        steps.append(
-            {
-                "type": "ExecutableStepDTO",
-                "stepOrder": i,
-                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-                "endCondition": end_condition,
-                "description": step.exercise,
-                "category": "strength",
-                "weightValue": step.weight_kg,
+    steps: list[dict[str, Any]] = []
+    order = 1
+    for step in session.steps:
+        # Garmin condition type IDs: 2 = time, 7 = iterations, 10 = reps.
+        # Numeric id is required ("Invalid WorkoutConditionTypeDTO id"), and
+        # the value goes in step-level endConditionValue — a value nested
+        # inside endCondition is silently dropped.
+        if step.reps:
+            end_condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
+            end_value: float = step.reps
+        else:
+            end_condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
+            end_value = step.duration_sec or 60
+        entry: dict[str, Any] = {
+            "type": "ExecutableStepDTO",
+            "stepOrder": order,
+            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+            "endCondition": end_condition,
+            "endConditionValue": end_value,
+            "description": step.exercise,
+        }
+        order += 1
+        if step.weight_kg is not None:
+            entry["weightValue"] = step.weight_kg
+            entry["weightUnit"] = {"unitKey": "kilogram"}
+        category, exercise_name = classify_garmin_exercise(step.exercise)
+        if category:
+            entry["category"] = category
+        if exercise_name:
+            entry["exerciseName"] = exercise_name
+
+        if step.sets > 1:
+            # Sets are modeled as a repeat group around the exercise step, not
+            # a field on it (numberOfIterations on an executable step is dropped).
+            group = {
+                "type": "RepeatGroupDTO",
+                "stepOrder": entry["stepOrder"],
+                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                 "numberOfIterations": step.sets,
+                "smartRepeat": False,
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "endConditionValue": step.sets,
+                "workoutSteps": [{**entry, "stepOrder": order}],
             }
-        )
+            order += 1
+            steps.append(group)
+        else:
+            steps.append(entry)
     return {
         "workoutName": session.title,
         "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},

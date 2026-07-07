@@ -1,33 +1,79 @@
-"""Payload shaping only — live Garmin calls are exercised by scripts/, not CI."""
+"""Payload shaping against the VERIFIED Garmin schema (docs/garmin_strength.md).
+Live calls are exercised by scripts/, not CI."""
 
 from datetime import date
 
 from vesper.schemas import ExerciseStep, StructuredSession
-from vesper.tools.garmin import build_strength_payload
+from vesper.tools.garmin import build_strength_payload, classify_garmin_exercise
 
 
-def test_strength_payload_shape():
-    session = StructuredSession(
-        for_date=date(2026, 7, 7),
+def session(steps: list[ExerciseStep]) -> StructuredSession:
+    return StructuredSession(
+        for_date=date(2026, 7, 8),
         kind="strength",
         title="Test session",
-        steps=[
-            ExerciseStep(exercise="Goblet squat", sets=3, reps=8, weight_kg=16),
-            ExerciseStep(exercise="Side plank", sets=2, duration_sec=40),
-        ],
+        steps=steps,
         est_duration_min=30,
     )
-    payload = build_strength_payload(session)
 
-    assert payload["workoutName"] == "Test session"
+
+def test_multi_set_step_becomes_repeat_group():
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Goblet squat", sets=3, reps=8, weight_kg=16)])
+    )
     assert payload["sportType"]["sportTypeKey"] == "strength_training"
-    steps = payload["workoutSegments"][0]["workoutSteps"]
-    assert [s["stepOrder"] for s in steps] == [1, 2]
+    (group,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert group["type"] == "RepeatGroupDTO"
+    assert group["numberOfIterations"] == 3
+    assert group["endCondition"] == {"conditionTypeId": 7, "conditionTypeKey": "iterations"}
 
-    reps_step = steps[0]
-    assert reps_step["endCondition"] == {"conditionTypeKey": "reps", "conditionValue": 8}
-    assert reps_step["weightValue"] == 16
-    assert reps_step["numberOfIterations"] == 3
+    (exercise,) = group["workoutSteps"]
+    assert exercise["type"] == "ExecutableStepDTO"
+    assert exercise["endCondition"] == {"conditionTypeId": 10, "conditionTypeKey": "reps"}
+    assert exercise["endConditionValue"] == 8  # step-level, NOT inside endCondition
+    assert exercise["weightValue"] == 16
+    assert exercise["weightUnit"] == {"unitKey": "kilogram"}
+    assert exercise["category"] == "SQUAT"
+    assert exercise["exerciseName"] == "GOBLET_SQUAT"
 
-    timed_step = steps[1]
-    assert timed_step["endCondition"] == {"conditionTypeKey": "time", "conditionValue": 40}
+
+def test_single_set_timed_step_stays_flat():
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Side plank", sets=1, duration_sec=40)])
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["type"] == "ExecutableStepDTO"
+    assert step["endCondition"] == {"conditionTypeId": 2, "conditionTypeKey": "time"}
+    assert step["endConditionValue"] == 40
+    assert "weightValue" not in step  # no weight -> field omitted
+
+
+def test_step_orders_are_sequential_across_groups():
+    payload = build_strength_payload(
+        session(
+            [
+                ExerciseStep(exercise="Goblet squat", sets=3, reps=8),
+                ExerciseStep(exercise="Side plank", sets=1, duration_sec=40),
+            ]
+        )
+    )
+    top = payload["workoutSegments"][0]["workoutSteps"]
+    assert top[0]["stepOrder"] == 1
+    assert top[0]["workoutSteps"][0]["stepOrder"] == 2
+    assert top[1]["stepOrder"] == 3
+
+
+def test_unmapped_exercise_omits_category():
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Nordic hamstring thing", sets=1, reps=5)])
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert "category" not in step
+    assert step["description"] == "Nordic hamstring thing"
+
+
+def test_taxonomy_prefers_specific_match():
+    assert classify_garmin_exercise("Goblet Squat") == ("SQUAT", "GOBLET_SQUAT")
+    assert classify_garmin_exercise("Back squat") == ("SQUAT", None)
+    assert classify_garmin_exercise("Romanian Deadlift") == ("DEADLIFT", "ROMANIAN_DEADLIFT")
+    assert classify_garmin_exercise("mystery move") == (None, None)
