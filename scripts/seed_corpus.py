@@ -11,8 +11,8 @@ import logging
 import sys
 from pathlib import Path
 
-from vesper.db import connect, migrate
-from vesper.tools.research import EMBEDDING_MODEL, chunk_text
+from jim.db import connect, migrate
+from jim.tools.research import EMBEDDING_MODEL, chunk_text
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def parse_doc(path: Path) -> tuple[str, list[str], str]:
 def embed_batch(texts: list[str]) -> list[list[float]]:
     from openai import OpenAI
 
-    from vesper.config import OPENROUTER_BASE_URL, settings
+    from jim.config import OPENROUTER_BASE_URL, settings
 
     client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=settings().openrouter_api_key)
     resp = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)

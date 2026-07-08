@@ -1,4 +1,4 @@
-from vesper.tools.research import chunk_text
+from jim.tools.research import chunk_text
 
 
 def test_short_doc_is_one_chunk():

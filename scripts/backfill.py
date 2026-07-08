@@ -8,8 +8,8 @@ import logging
 import sys
 from datetime import date, timedelta
 
-from vesper.db import connect, migrate
-from vesper.tools.garmin import get_garmin_today
+from jim.db import connect, migrate
+from jim.tools.garmin import get_garmin_today
 
 log = logging.getLogger(__name__)
 

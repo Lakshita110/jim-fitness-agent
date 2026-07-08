@@ -20,8 +20,8 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from vesper.config import settings
-from vesper.schemas import CheckIn, NotionDay, StructuredSession
+from jim.config import settings
+from jim.schemas import CheckIn, NotionDay, StructuredSession
 
 log = logging.getLogger(__name__)
 

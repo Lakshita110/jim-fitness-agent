@@ -7,8 +7,8 @@ domains, and pgvector search covers the vetted articles + PT protocol."""
 
 import logging
 
-from vesper.config import settings
-from vesper.schemas import ResearchHit
+from jim.config import settings
+from jim.schemas import ResearchHit
 
 log = logging.getLogger(__name__)
 
@@ -52,14 +52,14 @@ def chunk_text(text: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str]:
 def _embed(text: str) -> list[float]:
     from openai import OpenAI
 
-    from vesper.config import OPENROUTER_BASE_URL
+    from jim.config import OPENROUTER_BASE_URL
 
     client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=settings().openrouter_api_key)
     return client.embeddings.create(model=EMBEDDING_MODEL, input=text).data[0].embedding
 
 
 def corpus_search(question: str, k: int = CORPUS_K) -> list[ResearchHit]:
-    from vesper.db import connect
+    from jim.db import connect
 
     embedding = _embed(question)
     with connect() as conn:

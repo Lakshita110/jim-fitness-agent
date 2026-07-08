@@ -3,8 +3,8 @@ Live calls are exercised by scripts/, not CI."""
 
 from datetime import date
 
-from vesper.schemas import ExerciseStep, StructuredSession
-from vesper.tools.garmin import build_strength_payload, classify_garmin_exercise
+from jim.schemas import ExerciseStep, StructuredSession
+from jim.tools.garmin import build_strength_payload, classify_garmin_exercise
 
 
 def session(steps: list[ExerciseStep]) -> StructuredSession:
@@ -80,8 +80,8 @@ def test_taxonomy_prefers_specific_match():
 
 
 def test_build_template_payload_from_playbook_home_pt():
-    from vesper.playbook import load_playbook
-    from vesper.tools.garmin import build_template_payload
+    from jim.playbook import load_playbook
+    from jim.tools.garmin import build_template_payload
 
     home = load_playbook().pt_routines["pt_home"]
     payload = build_template_payload(home)

@@ -4,8 +4,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from vesper.agent.loop import Toolbox, ToolBudgetExceeded, run_agent
-from vesper.schemas import (
+from jim.agent.loop import Toolbox, ToolBudgetExceeded, run_agent
+from jim.schemas import (
     CheckIn,
     ExerciseStep,
     GarminToday,
@@ -175,7 +175,7 @@ def test_plan_for_today_targets_today_everywhere():
 def test_base_template_schedules_by_id_without_rebuild(monkeypatch):
     # When the agent selects a base workout (garmin_workout_id set) and auto-push
     # is on, the loop schedules the existing Garmin workout — never rebuilds it.
-    import vesper.agent.loop as loop_mod
+    import jim.agent.loop as loop_mod
 
     monkeypatch.setattr(loop_mod, "AUTO_PUSH", True)
     scheduled: list = []

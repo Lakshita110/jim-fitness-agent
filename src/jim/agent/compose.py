@@ -8,13 +8,13 @@ parse failures raise so the loop can retry/fall back deterministically."""
 import json
 from datetime import date
 
-from vesper.config import (
+from jim.config import (
     FORBIDDEN_EXERCISES,
     MAX_SESSION_MIN,
     MIN_DAYS_BETWEEN_LEG_SESSIONS,
     OPENROUTER_BASE_URL,
 )
-from vesper.schemas import (
+from jim.schemas import (
     CheckIn,
     GarminToday,
     HistoryFeatures,
@@ -101,7 +101,7 @@ def compose_session(
 ) -> StructuredSession:
     from openai import OpenAI
 
-    from vesper.config import settings
+    from jim.config import settings
 
     client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=settings().openrouter_api_key)
     system = SYSTEM_PROMPT.format(

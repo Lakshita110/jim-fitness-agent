@@ -5,7 +5,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from vesper.tools.notion import parse_knee_log_page, parse_task_page
+from jim.tools.notion import parse_knee_log_page, parse_task_page
 
 DAY = date(2026, 7, 6)
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "knee_log_page.json").read_text())
@@ -63,7 +63,7 @@ def test_parse_task_page():
 
 
 def test_parse_checkin_page():
-    from vesper.tools.notion import parse_checkin_page
+    from jim.tools.notion import parse_checkin_page
 
     page = {
         "properties": {
@@ -87,6 +87,6 @@ def test_parse_checkin_page():
 
 
 def test_empty_checkin_is_empty():
-    from vesper.tools.notion import parse_checkin_page
+    from jim.tools.notion import parse_checkin_page
 
     assert parse_checkin_page({"properties": {}}, DAY).is_empty()

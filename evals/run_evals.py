@@ -14,9 +14,9 @@ import sys
 from dataclasses import dataclass
 from datetime import date
 
-from vesper.agent.loop import RunReport, Toolbox, run_agent
-from vesper.config import MAX_TOOL_CALLS
-from vesper.schemas import (
+from jim.agent.loop import RunReport, Toolbox, run_agent
+from jim.config import MAX_TOOL_CALLS
+from jim.schemas import (
     CheckIn,
     ExerciseStep,
     GarminToday,

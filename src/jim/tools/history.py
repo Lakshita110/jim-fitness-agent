@@ -6,7 +6,7 @@ database; `query_history` is the thin DB-backed wrapper the agent calls."""
 from datetime import date, timedelta
 from typing import Any
 
-from vesper.schemas import HistoryFeatures
+from jim.schemas import HistoryFeatures
 
 # Activity/exercise name fragments -> coarse muscle group. Deliberately coarse:
 # the balance feature only needs to expose "you haven't touched X in a while".
@@ -106,7 +106,7 @@ def compute_features(
 def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
     """DB-backed tool contract (PLAN.md §7). Fetches window rows, delegates to
     the pure functions above."""
-    from vesper.db import connect
+    from jim.db import connect
 
     start = as_of - timedelta(days=window_days - 1)
     with connect() as conn:

@@ -12,13 +12,13 @@ import json
 import sys
 from datetime import date, timedelta
 
-from vesper.schemas import ExerciseStep, StructuredSession
-from vesper.tools.garmin import build_strength_payload, create_garmin_workout, schedule_workout
+from jim.schemas import ExerciseStep, StructuredSession
+from jim.tools.garmin import build_strength_payload, create_garmin_workout, schedule_workout
 
 HARDCODED = StructuredSession(
     for_date=date.today() + timedelta(days=1),
     kind="strength",
-    title="Vesper M1 round-trip test",
+    title="Jim M1 round-trip test",
     steps=[
         ExerciseStep(exercise="Goblet squat", sets=3, reps=8, weight_kg=16),
         ExerciseStep(exercise="Romanian deadlift", sets=3, reps=8, weight_kg=40),

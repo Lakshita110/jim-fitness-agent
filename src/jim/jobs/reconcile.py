@@ -3,16 +3,16 @@ morning job. `reconcile_day` matches a day's Garmin actuals against its stored
 suggestion, writing `outcomes` (adherence). The optional `main` additionally
 re-plans today when a Notion check-in was written after the nightly proposal —
 only needed if you use Notion morning check-ins instead of the chat interface.
-`python -m vesper.jobs.reconcile`."""
+`python -m jim.jobs.reconcile`."""
 
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from vesper.config import settings
-from vesper.db import connect
-from vesper.schemas import ActivitySummary, CheckIn, StructuredSession
-from vesper.tools.memory import record_outcome
+from jim.config import settings
+from jim.db import connect
+from jim.schemas import ActivitySummary, CheckIn, StructuredSession
+from jim.tools.memory import record_outcome
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def adhered(plan: StructuredSession, actuals: list[ActivitySummary]) -> tuple[bo
 def reconcile_day(day: date) -> None:
     """Match `day`'s Garmin actuals against its stored suggestion → outcomes.
     The nightly job calls this for *today* (the session is done by 21:00)."""
-    from vesper.tools.garmin import get_garmin_today
+    from jim.tools.garmin import get_garmin_today
 
     with connect() as conn:
         row = conn.execute(
@@ -83,9 +83,9 @@ def needs_replan(checkin: CheckIn, last_run_ts: datetime | None) -> bool:
 
 
 def morning_replan(today: date) -> None:
-    from vesper.agent.loop import run_agent
-    from vesper.config import AUTO_PUSH
-    from vesper.tools.notion import get_checkin
+    from jim.agent.loop import run_agent
+    from jim.config import AUTO_PUSH
+    from jim.tools.notion import get_checkin
 
     checkin = get_checkin(today)
     with connect() as conn:
@@ -102,7 +102,7 @@ def morning_replan(today: date) -> None:
     log.info("check-in for %s arrived after the nightly proposal — re-planning", today)
     if AUTO_PUSH:
         # Drop the stale auto-pushed schedule before the re-plan pushes its own.
-        from vesper.tools.garmin import clear_schedule
+        from jim.tools.garmin import clear_schedule
 
         clear_schedule(today)
     report = run_agent(today, plan_for=today)

@@ -5,24 +5,24 @@
 # 21:00 America/New_York = 01:00/02:00 UTC depending on DST; 02:00 UTC chosen.
 services:
   - type: web
-    name: vesper-web
+    name: jim-web
     runtime: python
     buildCommand: pip install -e .
-    startCommand: uvicorn vesper.app:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn jim.app:app --host 0.0.0.0 --port $PORT
     envVars:
-      - fromGroup: vesper-secrets
+      - fromGroup: jim-secrets
 
   - type: cron
-    name: vesper-nightly
+    name: jim-nightly
     runtime: python
     schedule: "0 2 * * *"   # ~21:00 America/New_York
     buildCommand: pip install -e .
-    startCommand: python -m vesper.jobs.nightly
+    startCommand: python -m jim.jobs.nightly
     envVars:
-      - fromGroup: vesper-secrets
+      - fromGroup: jim-secrets
 
 envVarGroups:
-  - name: vesper-secrets
+  - name: jim-secrets
     envVars:
       - key: GARMIN_EMAIL
         sync: false

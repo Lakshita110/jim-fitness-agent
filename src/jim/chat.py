@@ -17,8 +17,8 @@ import logging
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
-from vesper.config import CHAT_TODAY_CUTOFF_HOUR
-from vesper.schemas import CheckIn, StructuredSession
+from jim.config import CHAT_TODAY_CUTOFF_HOUR
+from jim.schemas import CheckIn, StructuredSession
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def handle_chat_message(
 ) -> str:
     """Turn one chat message into a re-plan and return the reply text."""
     if runner is None:
-        from vesper.agent.loop import run_agent
+        from jim.agent.loop import run_agent
 
         runner = run_agent
     target, note = resolve_target_day(text, now)

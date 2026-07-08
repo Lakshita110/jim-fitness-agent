@@ -6,7 +6,7 @@ Garmin actuals against the stored suggestion and writing `outcomes`."""
 import json
 from datetime import date
 
-from vesper.schemas import StructuredSession
+from jim.schemas import StructuredSession
 
 
 def record_suggestion(
@@ -16,7 +16,7 @@ def record_suggestion(
     research_used: bool,
     tier: str,
 ) -> int:
-    from vesper.db import connect
+    from jim.db import connect
 
     with connect() as conn:
         row = conn.execute(
@@ -34,7 +34,7 @@ def record_outcome(
     adhered: bool | None,
     notes: str = "",
 ) -> None:
-    from vesper.db import connect
+    from jim.db import connect
 
     with connect() as conn:
         conn.execute(

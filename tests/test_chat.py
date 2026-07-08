@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from vesper.agent.loop import RunReport
-from vesper.chat import format_proposal, handle_chat_message, resolve_target_day
-from vesper.schemas import ExerciseStep, StructuredSession
+from jim.agent.loop import RunReport
+from jim.chat import format_proposal, handle_chat_message, resolve_target_day
+from jim.schemas import ExerciseStep, StructuredSession
 
 TODAY = date(2026, 7, 8)
 MORNING = datetime(2026, 7, 8, 7, 30)

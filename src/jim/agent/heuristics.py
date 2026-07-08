@@ -6,8 +6,8 @@
 
 Both are pure functions of the day's state — no LLM, no I/O."""
 
-from vesper.config import MIN_DAYS_BETWEEN_LEG_SESSIONS
-from vesper.schemas import GarminToday, HistoryFeatures, NotionDay
+from jim.config import MIN_DAYS_BETWEEN_LEG_SESSIONS
+from jim.schemas import GarminToday, HistoryFeatures, NotionDay
 
 PAIN_SPIKE_LEVEL = 5  # absolute pain level that always counts as "off"
 PAIN_TREND_ALERT = 0.15  # points/day upward slope over the window

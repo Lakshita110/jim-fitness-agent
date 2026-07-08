@@ -1,4 +1,4 @@
--- Vesper core schema (PLAN.md §6). Additive and idempotent: safe to re-run.
+-- Jim core schema (PLAN.md §6). Additive and idempotent: safe to re-run.
 -- pgvector-dependent tables live in 002_research_corpus.sql.
 
 CREATE TABLE IF NOT EXISTS garmin_daily (

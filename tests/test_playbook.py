@@ -1,4 +1,4 @@
-from vesper.playbook import Playbook, load_playbook
+from jim.playbook import Playbook, load_playbook
 
 
 def test_loads_real_playbook_files():

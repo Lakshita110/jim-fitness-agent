@@ -1,5 +1,5 @@
 [project]
-name = "vesper"
+name = "jim"
 version = "0.1.0"
 description = "Nightly training agent: reviews the day (Garmin + Notion), proposes tomorrow's session, pushes structured workouts to Garmin on approval."
 requires-python = ">=3.11"

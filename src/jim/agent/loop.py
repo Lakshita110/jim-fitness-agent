@@ -12,19 +12,19 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
-from vesper.agent import compose, heuristics, validate
-from vesper.config import (
+from jim.agent import compose, heuristics, validate
+from jim.config import (
     AUTO_PUSH,
     MAX_TOOL_CALLS,
     MODEL_FAST,
     MODEL_QUALITY,
     RESEARCH_ENABLED,
 )
-from vesper.schemas import ResearchHit, StructuredSession
+from jim.schemas import ResearchHit, StructuredSession
 
 if TYPE_CHECKING:
-    from vesper.playbook import Playbook
-    from vesper.schemas import CheckIn
+    from jim.playbook import Playbook
+    from jim.schemas import CheckIn
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class Toolbox:
 
     @classmethod
     def live(cls) -> "Toolbox":
-        from vesper.tools import garmin, history, memory, notion, research
+        from jim.tools import garmin, history, memory, notion, research
 
         return cls(
             get_garmin_today=garmin.get_garmin_today,
@@ -89,7 +89,7 @@ def run_agent(
     """Plan the session for `plan_for` (default: tomorrow — the nightly run).
     The chat interface passes plan_for + its own `checkin` (built from the
     message), which skips the Notion check-in read."""
-    from vesper.playbook import load_playbook
+    from jim.playbook import load_playbook
 
     tools = tools or Toolbox.live()
     playbook = playbook if playbook is not None else load_playbook()

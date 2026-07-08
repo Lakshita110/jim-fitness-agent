@@ -11,11 +11,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from vesper.agent.loop import run_agent
-from vesper.chat import handle_chat_message
-from vesper.config import settings
+from jim.agent.loop import run_agent
+from jim.chat import handle_chat_message
+from jim.config import settings
 
-app = FastAPI(title="vesper")
+app = FastAPI(title="jim")
 
 
 @app.get("/health")
@@ -64,7 +64,7 @@ def chat_message(msg: ChatMessage) -> dict[str, str]:
 CHAT_PAGE = """<!doctype html><html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Vesper</title>
+<title>Jim</title>
 <style>
 * { box-sizing: border-box; margin: 0; }
 body { font-family: -apple-system, system-ui, sans-serif; background: #f8f7f4; height: 100dvh;
@@ -84,7 +84,7 @@ input { flex: 1; padding: 11px 14px; border: 1px solid #cbd5df; border-radius: 2
 button { padding: 0 18px; border: none; border-radius: 22px; background: #1c2b3a;
          color: #fff; font-weight: 600; font-size: 14px; }
 </style></head><body>
-<header>Vesper — tell me about your day</header>
+<header>Jim — tell me about your day</header>
 <div id="log"><div class="msg bot">Tell me how you're feeling, where you'll be, or what you \
 want — I'll plan around it. Example: "left knee sore, home only, 30 min".</div></div>
 <form id="f"><input id="t" placeholder="Message" autocomplete="off"><button>Send</button></form>

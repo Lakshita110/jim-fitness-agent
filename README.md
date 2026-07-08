@@ -1,4 +1,4 @@
-# Vesper
+# Jim
 
 A nightly training agent (single-user personal tool). At end of day it reviews
 what actually happened (Garmin + Notion), reasons about tomorrow within joint
@@ -8,9 +8,9 @@ structured workouts to Garmin Connect on approval.
 Full design: [PLAN.md](PLAN.md). Milestone status:
 
 - [x] **M1** — Garmin write round-trip: verified server-side (docs/garmin_strength.md); awaiting on-watch visual confirmation
-- [x] **M2** — State layer as tools (`vesper/tools/`, fixture-tested, `scripts/backfill.py`)
-- [x] **M3** — Bounded agent loop, propose-only (`vesper/agent/loop.py`) + morning reconcile
-- [x] **M4** — Gated research + tier escalation (`vesper/tools/research.py`, `agent/heuristics.py`)
+- [x] **M2** — State layer as tools (`jim/tools/`, fixture-tested, `scripts/backfill.py`)
+- [x] **M3** — Bounded agent loop, propose-only (`jim/agent/loop.py`) + morning reconcile
+- [x] **M4** — Gated research + tier escalation (`jim/tools/research.py`, `agent/heuristics.py`)
 - [ ] **M5** — Eval suite gating `AUTO_PUSH` (`evals/run_evals.py` scaffold; needs live-compose scenarios)
 
 M2–M4 are implemented and unit-tested offline; the Notion schema mapping is
@@ -21,7 +21,7 @@ M1 is deliberately the first thing to run.
 ## Layout
 
 ```
-src/vesper/
+src/jim/
   config.py          # PLAN §8 constants + env-backed secrets
   schemas.py         # typed tool contracts (PLAN §7)
   db.py              # Postgres + idempotent migration runner
@@ -63,10 +63,10 @@ python evals/run_evals.py
 ```bash
 python scripts/m1_roundtrip.py        # M1: put one hardcoded workout on the watch
 python scripts/backfill.py 90        # M2: backfill Garmin history into Postgres
-python -m vesper.jobs.nightly        # the nightly agent run
-python -m vesper.jobs.reconcile      # the morning adherence job
-uvicorn vesper.app:app --reload      # local service
+python -m jim.jobs.nightly        # the nightly agent run
+python -m jim.jobs.reconcile      # the morning adherence job
+uvicorn jim.app:app --reload      # local service
 ```
 
 Deploy: `render.yaml` (web service + two cron jobs; secrets via the
-`vesper-secrets` env group). Cron schedules are in UTC — see the comment there.
+`jim-secrets` env group). Cron schedules are in UTC — see the comment there.

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-import vesper.app as app_mod
+import jim.app as app_mod
 
 client = TestClient(app_mod.app)
 
@@ -21,7 +21,7 @@ def test_chat_page_requires_key(monkeypatch):
     assert client.get("/chat", params={"key": "wrong"}).status_code == 403
     ok = client.get("/chat", params={"key": "s3cret"})
     assert ok.status_code == 200
-    assert "Vesper" in ok.text
+    assert "Jim" in ok.text
 
 
 def test_chat_disabled_without_secret(monkeypatch):

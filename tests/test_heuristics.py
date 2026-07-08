@@ -1,7 +1,7 @@
 from datetime import date
 
-from vesper.agent.heuristics import something_off, state_ambiguous
-from vesper.schemas import GarminToday, HistoryFeatures, NotionDay
+from jim.agent.heuristics import something_off, state_ambiguous
+from jim.schemas import GarminToday, HistoryFeatures, NotionDay
 
 DAY = date(2026, 7, 6)
 

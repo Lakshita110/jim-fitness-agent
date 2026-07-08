@@ -1,22 +1,22 @@
 """Nightly entrypoint for Render Cron (~21:00 local): sync today's data into
-Postgres, then run the agent. `python -m vesper.jobs.nightly`."""
+Postgres, then run the agent. `python -m jim.jobs.nightly`."""
 
 import json
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from vesper.agent.loop import run_agent
-from vesper.config import settings
-from vesper.db import connect, migrate
+from jim.agent.loop import run_agent
+from jim.config import settings
+from jim.db import connect, migrate
 
 log = logging.getLogger(__name__)
 
 
 def sync_today() -> None:
     """Persist today's Garmin + Notion state so query_history has fresh rows."""
-    from vesper.tools.garmin import get_garmin_today
-    from vesper.tools.notion import get_notion_logs
+    from jim.tools.garmin import get_garmin_today
+    from jim.tools.notion import get_notion_logs
 
     today = datetime.now(ZoneInfo(settings().app_timezone)).date()
     garmin = get_garmin_today(today)
@@ -54,7 +54,7 @@ def sync_today() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    from vesper.jobs.reconcile import reconcile_day
+    from jim.jobs.reconcile import reconcile_day
 
     with connect() as conn:
         migrate(conn)

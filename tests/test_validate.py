@@ -1,7 +1,7 @@
 from datetime import date
 
-from vesper.agent.validate import fallback_session, validate
-from vesper.schemas import ExerciseStep, HistoryFeatures, StructuredSession
+from jim.agent.validate import fallback_session, validate
+from jim.schemas import ExerciseStep, HistoryFeatures, StructuredSession
 
 FOR_DATE = date(2026, 7, 7)
 

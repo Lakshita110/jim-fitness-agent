@@ -1,6 +1,6 @@
 # Chat interface
 
-Talking to Vesper replaces the morning cron entirely: a message IS a check-in,
+Talking to Jim replaces the morning cron entirely: a message IS a check-in,
 and it triggers an immediate re-plan with the reply being tomorrow's (or
 today's) proposal.
 
@@ -53,5 +53,5 @@ route in `app.py` away:
 - **Chat, anytime**: adjust today or tomorrow on demand.
 - The Notion `training check-in` DB still works as a structured alternative —
   read at the nightly run. The optional morning job
-  (`python -m vesper.jobs.reconcile`) exists only for Notion-morning-check-in
+  (`python -m jim.jobs.reconcile`) exists only for Notion-morning-check-in
   users; with chat, don't schedule it.

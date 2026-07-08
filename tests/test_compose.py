@@ -4,8 +4,8 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from vesper.agent.compose import build_user_prompt, parse_session
-from vesper.schemas import GarminToday, HistoryFeatures, NotionDay, ResearchHit
+from jim.agent.compose import build_user_prompt, parse_session
+from jim.schemas import GarminToday, HistoryFeatures, NotionDay, ResearchHit
 
 FOR_DATE = date(2026, 7, 7)
 

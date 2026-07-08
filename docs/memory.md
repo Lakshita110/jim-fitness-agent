@@ -1,6 +1,6 @@
 # Memory & instructions
 
-Vesper has three memory layers, separated by how often each changes and who
+Jim has three memory layers, separated by how often each changes and who
 edits it. This is the answer to "how do I give the agent instructions."
 
 ## 1. Playbook — durable knowledge you edit (files)
@@ -54,7 +54,7 @@ guardrail). Everything's optional — a blank or missing check-in just means
 **The chat interface is the faster path for day-of changes** (docs/chat.md):
 message the agent any time and it re-plans immediately — no cron involved.
 Morning Notion check-ins are still supported via the *optional* morning job
-(`python -m vesper.jobs.reconcile`, not scheduled by default), which re-plans
+(`python -m jim.jobs.reconcile`, not scheduled by default), which re-plans
 today when the check-in's `last_edited_time` is newer than the nightly
 proposal.
 

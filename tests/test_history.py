@@ -1,6 +1,6 @@
 from datetime import date
 
-from vesper.tools.history import (
+from jim.tools.history import (
     classify_muscle_group,
     compute_features,
     days_since_legs,

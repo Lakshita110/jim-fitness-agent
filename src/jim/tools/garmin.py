@@ -13,11 +13,11 @@ import logging
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from vesper.config import settings
-from vesper.schemas import ActivitySummary, GarminToday, StructuredSession, WorkoutRef
+from jim.config import settings
+from jim.schemas import ActivitySummary, GarminToday, StructuredSession, WorkoutRef
 
 if TYPE_CHECKING:
-    from vesper.playbook import WorkoutTemplate
+    from jim.playbook import WorkoutTemplate
 
 log = logging.getLogger(__name__)
 

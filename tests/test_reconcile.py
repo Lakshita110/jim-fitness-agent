@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 
-from vesper.jobs.reconcile import adhered, needs_replan
-from vesper.schemas import ActivitySummary, CheckIn, ExerciseStep, StructuredSession
+from jim.jobs.reconcile import adhered, needs_replan
+from jim.schemas import ActivitySummary, CheckIn, ExerciseStep, StructuredSession
 
 FOR_DATE = date(2026, 7, 6)
 

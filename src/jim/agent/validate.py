@@ -3,7 +3,7 @@
 Rejecting returns the violations so the agent can revise once, then fall back
 to a conservative session. No LLM involvement: these are hard constraints."""
 
-from vesper.config import (
+from jim.config import (
     FORBIDDEN_EXERCISES,
     GARMIN_MAX_STEPS,
     MAX_LOAD_PROGRESSION,
@@ -11,8 +11,8 @@ from vesper.config import (
     MAX_WEEKLY_VOLUME_MIN,
     MIN_DAYS_BETWEEN_LEG_SESSIONS,
 )
-from vesper.schemas import HistoryFeatures, StructuredSession, ValidationResult
-from vesper.tools.history import classify_muscle_group
+from jim.schemas import HistoryFeatures, StructuredSession, ValidationResult
+from jim.tools.history import classify_muscle_group
 
 
 def validate(session: StructuredSession, features: HistoryFeatures) -> ValidationResult:
@@ -67,7 +67,7 @@ def validate(session: StructuredSession, features: HistoryFeatures) -> Validatio
 
 def fallback_session(session: StructuredSession) -> StructuredSession:
     """Conservative fallback when revision still fails: PT + mobility only."""
-    from vesper.schemas import ExerciseStep
+    from jim.schemas import ExerciseStep
 
     return StructuredSession(
         for_date=session.for_date,
