@@ -27,19 +27,22 @@ def day(iso: str, **overrides) -> dict:
 
 
 class Fakes:
-    def __init__(self, llm_outputs=None):
+    def __init__(self, llm_outputs=None, lookups=None):
         self.kv: dict = {}
         self.llm_outputs = llm_outputs or []
         self.llm_calls: list[list[dict]] = []
         self.scheduled: list = []
         self.created: list = []
         self.recorded: list = []
+        self.lookups = lookups or {}
 
     def deps(self) -> CoachDeps:
-        def llm(messages):
+        def llm(messages, tools=None):
             self.llm_calls.append(messages)
             out = self.llm_outputs[min(len(self.llm_calls) - 1, len(self.llm_outputs) - 1)]
-            return json.dumps(out)
+            if isinstance(out, dict) and out.get("tool_calls"):
+                return out  # raw tool-call response
+            return {"content": json.dumps(out), "tool_calls": None}
 
         def create(session):
             self.created.append(session)
@@ -57,6 +60,7 @@ class Fakes:
                                               "weekly_volume_min": 200,
                                               "days_since_legs": 3}},
             llm=llm,
+            lookup_tools=self.lookups,
             schedule_workout=lambda wid, on: self.scheduled.append((wid, on)),
             create_garmin_workout=create,
             record_suggestion=record,
@@ -170,6 +174,62 @@ def test_clear_resets_history_but_keeps_draft_and_goals():
     assert state["history"] == []
     assert len(state["draft"]) == 1
     assert state["goals"] == "keep me"
+
+
+def test_lookup_tool_round_feeds_result_back():
+    # Turn 1: model asks for exercise history. Turn 2: final answer using it.
+    f = Fakes(
+        llm_outputs=[
+            {"content": None, "tool_calls": [
+                {"id": "c1", "name": "exercise_history",
+                 "arguments": json.dumps({"exercise": "goblet squat"})},
+            ]},
+            {"reply": "Last time you did 3x12 @ 16kg — let's go 18kg.",
+             "draft": [day("2026-07-09", steps=[{"exercise": "Goblet squat", "sets": 3,
+                                                 "reps": 10, "duration_sec": None,
+                                                 "weight_kg": 18, "notes": ""}])],
+             "goals": None},
+        ],
+        lookups={"exercise_history": lambda exercise: f"{exercise}: 2026-07-01: 3x12 @ 16kg"},
+    )
+    out = converse("bump my goblet squat", f.deps())
+    assert "18kg" in out["reply"]
+    assert out["draft"][0]["steps"][0]["weight_kg"] == 18
+    # second LLM call saw the tool result
+    tool_msgs = [m for m in f.llm_calls[1] if m.get("role") == "tool"]
+    assert tool_msgs and "3x12 @ 16kg" in tool_msgs[0]["content"]
+
+
+def test_failed_lookup_does_not_kill_the_turn():
+    f = Fakes(
+        llm_outputs=[
+            {"content": None, "tool_calls": [
+                {"id": "c1", "name": "research", "arguments": json.dumps({"question": "x"})},
+            ]},
+            {"reply": "ok without research", "draft": None, "goals": None},
+        ],
+        lookups={"research": lambda question: (_ for _ in ()).throw(RuntimeError("no key"))},
+    )
+    out = converse("what does the evidence say", f.deps())
+    assert out["reply"] == "ok without research"
+    tool_msgs = [m for m in f.llm_calls[1] if m.get("role") == "tool"]
+    assert "lookup failed" in tool_msgs[0]["content"]
+
+
+def test_tool_budget_forces_final_answer():
+    ask_again = {"content": None, "tool_calls": [
+        {"id": "c1", "name": "workout_history", "arguments": "{}"},
+    ]}
+    f = Fakes(
+        llm_outputs=[ask_again, ask_again, ask_again, ask_again,
+                     {"reply": "final", "draft": None, "goals": None}],
+        lookups={"workout_history": lambda days=14: "stuff"},
+    )
+    out = converse("hi", f.deps())
+    assert out["reply"] == "final"
+    # 4 tool rounds + 1 forced final = 5 llm calls
+    assert len(f.llm_calls) == 5
+    assert f.llm_calls[-1][-1]["content"].startswith("SYSTEM: answer now")
 
 
 def test_format_draft_renders_doses_and_template_refs():

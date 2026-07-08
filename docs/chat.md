@@ -26,6 +26,11 @@ until you hit Push to Garmin**.
 - **Long-term goals**: say "my long-term goal is X" and Jim rewrites your
   goals block — stored durably, nothing scheduled. Goals are read by every
   chat turn *and* every nightly run, so they shape plans continuously.
+- **Jim looks things up** (bounded to 4 lookups per turn): your per-exercise
+  performance history from the watch (actual sets × reps @ kg — checked
+  before any weight is prescribed, progressed conservatively), your recent
+  workouts + adherence, and research (curated corpus + web) for pain-driven
+  substitutions with citations.
 - **Push to Garmin**: the button (or asking Jim won't do it — the button is
   the approval) schedules each day of the draft. Template days schedule your
   existing Garmin workout (weights preserved); adapted days are created then

@@ -45,8 +45,11 @@ chat are recorded `source='chat'` and the nightly run skips them.
 ## 4. Episodic memory — what actually happened (Postgres)
 
 `suggestions` + `outcomes`: each proposal is recorded; the nightly job
-reconciles the day's Garmin actuals against it (adherence). This is what Jim
-*learns from* across weeks.
+reconciles the day's Garmin actuals against it (adherence).
+`exercise_sets`: every ACTIVE set from logged strength sessions (exercise,
+reps, kg — synced nightly, backfillable). This is what Jim *learns from*: in
+chat it looks up `exercise_history("goblet squat")` before prescribing a
+weight and progresses from what you actually lifted.
 
 ## Notion: read source only
 

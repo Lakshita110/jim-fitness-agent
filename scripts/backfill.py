@@ -9,7 +9,8 @@ import sys
 from datetime import date, timedelta
 
 from jim.db import connect, migrate
-from jim.tools.garmin import get_garmin_today
+from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets
+from jim.tools.garmin import get_exercise_sets, get_garmin_today
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,13 @@ def main(days: int = 90) -> None:
                     (act.activity_id, day, act.type, act.duration_min,
                      act.training_load, act.model_dump_json()),
                 )
+                if act.type in STRENGTH_TYPES:
+                    try:
+                        store_exercise_sets(
+                            conn, act.activity_id, day, get_exercise_sets(act.activity_id)
+                        )
+                    except Exception:
+                        log.exception("sets fetch failed for %s", act.activity_id)
             conn.commit()
             log.info("backfilled %s (%d activities)", day, len(snapshot.activities))
 

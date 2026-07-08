@@ -2,6 +2,11 @@
 plan for tomorrow or the week, keep long-term goals in plain language, and
 push to Garmin only on explicit approve.
 
+The model can LOOK THINGS UP mid-turn (bounded to MAX_TOOL_ROUNDS):
+per-exercise performance history from the watch (checked before prescribing
+weights), recent workout/adherence history, and research (curated corpus +
+web). Lookups happen inside a turn and are not persisted to chat history.
+
 State is deliberately simple — everything lives in the kv store:
 - 'chat_history': last HISTORY_LIMIT messages [{role, content}]
 - 'draft': the working plan, a list of StructuredSession dicts (dated days)
@@ -34,6 +39,50 @@ HISTORY_LIMIT = 30
 STATE_TTL_MIN = 60
 DRAFT_MAX_DAYS = 7
 MAX_REPLY_CHARS = 3800
+MAX_TOOL_ROUNDS = 4  # lookup rounds per turn — keeps cost bounded
+
+# Lookups the model may call mid-conversation (OpenAI function schemas).
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "exercise_history",
+            "description": "How the athlete actually performed a movement recently"
+            " (per-session sets x reps @ weight, from watch data). ALWAYS check"
+            " this before prescribing or changing a weight/rep target.",
+            "parameters": {
+                "type": "object",
+                "properties": {"exercise": {"type": "string",
+                                            "description": "movement name, e.g. 'goblet squat'"}},
+                "required": ["exercise"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "workout_history",
+            "description": "Recent workouts and plan adherence over the last N days.",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer", "description": "lookback, default 14"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "research",
+            "description": "Search the curated rehab/training corpus and the web for"
+            " grounded guidance. Use for pain-driven substitutions and cite sources.",
+            "parameters": {
+                "type": "object",
+                "properties": {"question": {"type": "string"}},
+                "required": ["question"],
+            },
+        },
+    },
+]
 
 SYSTEM_PROMPT = """You are Jim, a careful strength & conditioning coach for one athlete
 with knee and ankle constraints. You chat naturally and iterate on training plans.
@@ -57,6 +106,12 @@ goals into your planning (progressions, deloads, milestones).
 DRAFT: the current working plan. Revise it when asked. A draft covers 1-{max_days}
 dated days. Nothing touches the athlete's watch until they explicitly approve.
 
+TOOLS: look things up instead of guessing. Call exercise_history BEFORE setting
+any weight or rep target and progress conservatively from what was actually done
+(+2.5-5% load or +1-2 reps after a solid session; hold or reduce after a rough
+one). Call workout_history for what recently happened; call research for
+pain-driven substitutions and cite the sources in your reply.
+
 Today is {today}. Respond ONLY with a JSON object:
 {{"reply": str,                      # your conversational answer, concise
   "draft": [session, ...] | null,   # null = keep current draft unchanged; [] = clear it
@@ -75,7 +130,9 @@ class CoachDeps:
     kv_get: Callable[[str], Any]
     kv_set: Callable[[str, Any], None]
     fetch_state: Callable[[], dict]  # fresh garmin/notion/features snapshot
-    llm: Callable[[list[dict]], str]  # chat messages -> raw model text
+    # (messages, tool_schemas|None) -> {"content": str|None, "tool_calls": [...]|None}
+    llm: Callable[[list[dict], list[dict] | None], dict]
+    lookup_tools: dict[str, Callable[..., str]]  # name -> callable, see TOOL_SCHEMAS
     schedule_workout: Callable[..., None]
     create_garmin_workout: Callable[..., Any]
     record_suggestion: Callable[..., int]
@@ -90,7 +147,7 @@ class CoachDeps:
         from jim.db import kv_get, kv_set
         from jim.playbook import load_playbook
         from jim.tools import garmin, memory, notion
-        from jim.tools.history import query_history
+        from jim.tools.history import exercise_history, query_history, workout_history
 
         def now() -> datetime:
             return datetime.now(ZoneInfo(settings().app_timezone))
@@ -103,24 +160,42 @@ class CoachDeps:
                 "features": query_history(today).model_dump(mode="json"),
             }
 
-        def llm(messages: list[dict]) -> str:
+        def llm(messages: list[dict], tools: list[dict] | None = None) -> dict:
             from openai import OpenAI
 
             client = OpenAI(
                 base_url=OPENROUTER_BASE_URL, api_key=settings().openrouter_api_key
             )
-            resp = client.chat.completions.create(
-                model=MODEL_FAST,
-                response_format={"type": "json_object"},
-                messages=messages,
-            )
-            return resp.choices[0].message.content or ""
+            kwargs: dict = {"model": MODEL_FAST, "messages": messages}
+            if tools:
+                kwargs["tools"] = tools
+            else:
+                kwargs["response_format"] = {"type": "json_object"}
+            msg = client.chat.completions.create(**kwargs).choices[0].message
+            return {
+                "content": msg.content,
+                "tool_calls": [
+                    {"id": c.id, "name": c.function.name, "arguments": c.function.arguments}
+                    for c in (msg.tool_calls or [])
+                ] or None,
+            }
+
+        def research(question: str) -> str:
+            from jim.tools.research import research_training
+
+            hits = research_training(question)
+            return "\n".join(f"[{h.source}] {h.title}: {h.snippet}" for h in hits) or "(no hits)"
 
         return cls(
             kv_get=kv_get,
             kv_set=kv_set,
             fetch_state=fetch_state,
             llm=llm,
+            lookup_tools={
+                "exercise_history": exercise_history,
+                "workout_history": workout_history,
+                "research": research,
+            },
             schedule_workout=garmin.schedule_workout,
             create_garmin_workout=garmin.create_garmin_workout,
             record_suggestion=memory.record_suggestion,
@@ -205,9 +280,46 @@ def _system_prompt(deps: CoachDeps, state: dict) -> str:
     return "\n\n".join(parts)
 
 
+def _loads_json(text: str) -> dict:
+    """Lenient JSON parse — strips markdown fences some models emit."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        cleaned = cleaned.rsplit("```", 1)[0]
+    return json.loads(cleaned)
+
+
 def _run_model(deps: CoachDeps, system: str, history: list[dict]) -> dict:
-    raw = deps.llm([{"role": "system", "content": system}, *history])
-    return json.loads(raw)
+    """One model turn, with a bounded lookup loop: the model may call
+    exercise_history / workout_history / research before answering."""
+    msgs = [{"role": "system", "content": system}, *history]
+    for _ in range(MAX_TOOL_ROUNDS):
+        resp = deps.llm(msgs, TOOL_SCHEMAS)
+        calls = resp.get("tool_calls")
+        if not calls:
+            return _loads_json(resp.get("content") or "")
+        msgs.append({
+            "role": "assistant",
+            "content": resp.get("content"),
+            "tool_calls": [
+                {"id": c["id"], "type": "function",
+                 "function": {"name": c["name"], "arguments": c["arguments"]}}
+                for c in calls
+            ],
+        })
+        for c in calls:
+            try:
+                fn = deps.lookup_tools[c["name"]]
+                result = str(fn(**json.loads(c["arguments"] or "{}")))
+            except Exception as e:  # a failed lookup shouldn't kill the turn
+                log.warning("lookup %s failed: %s", c.get("name"), e)
+                result = f"lookup failed: {e}"
+            log.info("lookup %s(%s)", c["name"], c["arguments"])
+            msgs.append({"role": "tool", "tool_call_id": c["id"], "content": result[:4000]})
+    # Lookup budget exhausted — force a final answer without tools.
+    msgs.append({"role": "user", "content": "SYSTEM: answer now with the final JSON only."})
+    resp = deps.llm(msgs, None)
+    return _loads_json(resp.get("content") or "")
 
 
 def converse(text: str, deps: CoachDeps | None = None) -> dict:

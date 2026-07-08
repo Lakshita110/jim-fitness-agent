@@ -124,3 +124,83 @@ def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
             (start, as_of),
         ).fetchall()
     return compute_features(as_of, window_days, activities, logs, daily)
+
+
+# --- exercise-level performance history (progression memory) ----------------
+
+
+def summarize_exercise_history(rows: list[dict[str, Any]], max_sessions: int = 5) -> str:
+    """Compact per-exercise performance text from exercise_sets rows.
+
+    Pure. Rows: {day, category, exercise_name, reps, weight_kg}. Groups by
+    exercise (name, falling back to category), then by day; each day renders
+    as "N sets x rep-range @ max-weight". Newest sessions first."""
+    by_exercise: dict[str, dict[date, list[dict[str, Any]]]] = {}
+    for r in rows:
+        label = r.get("exercise_name") or r.get("category") or "UNKNOWN"
+        by_exercise.setdefault(label, {}).setdefault(r["day"], []).append(r)
+
+    lines: list[str] = []
+    for label in sorted(by_exercise):
+        days = sorted(by_exercise[label], reverse=True)[:max_sessions]
+        sessions = []
+        for d in days:
+            sets = by_exercise[label][d]
+            reps = [s["reps"] for s in sets if s.get("reps")]
+            weights = [s["weight_kg"] for s in sets if s.get("weight_kg")]
+            rep_txt = (
+                f"{min(reps)}-{max(reps)}" if reps and min(reps) != max(reps)
+                else (str(reps[0]) if reps else "?")
+            )
+            weight_txt = f" @ {max(weights):g}kg" if weights else ""
+            sessions.append(f"{d.isoformat()}: {len(sets)}x{rep_txt}{weight_txt}")
+        lines.append(f"{label}: " + "; ".join(sessions))
+    return "\n".join(lines) if lines else "(no logged sets found)"
+
+
+def exercise_history(exercise: str, days: int = 180) -> str:
+    """How the athlete actually performed a movement recently (DB-backed tool).
+
+    Fuzzy match: "goblet squat" hits GOBLET_SQUAT via name/category ILIKE."""
+    from jim.db import connect
+
+    needle = "%" + "%".join(exercise.strip().upper().split()) + "%"
+    since = date.today() - timedelta(days=days)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT day, category, exercise_name, reps, weight_kg FROM exercise_sets"
+            " WHERE day >= %s AND (exercise_name ILIKE %s OR category ILIKE %s)"
+            " ORDER BY day DESC",
+            (since, needle, needle),
+        ).fetchall()
+    return summarize_exercise_history(rows)
+
+
+def workout_history(days: int = 14) -> str:
+    """Recent workouts + adherence (DB-backed tool for the coach)."""
+    from jim.db import connect
+
+    since = date.today() - timedelta(days=days)
+    with connect() as conn:
+        acts = conn.execute(
+            "SELECT day, type, duration_min FROM garmin_activities"
+            " WHERE day >= %s ORDER BY day DESC",
+            (since,),
+        ).fetchall()
+        outcomes = conn.execute(
+            "SELECT s.for_date, s.plan->>'title' AS title, o.adhered, o.notes"
+            " FROM suggestions s JOIN outcomes o ON o.suggestion_id = s.id"
+            " WHERE s.for_date >= %s ORDER BY s.for_date DESC",
+            (since,),
+        ).fetchall()
+    lines = [
+        f"{a['day']}: {a['type']} ({a['duration_min']:.0f} min)" for a in acts
+    ] or ["(no activities recorded)"]
+    if outcomes:
+        lines.append("Plan adherence:")
+        lines += [
+            f"{o['for_date']}: {o['title']} — {'done' if o['adhered'] else 'missed'}"
+            f" ({o['notes']})"
+            for o in outcomes
+        ]
+    return "\n".join(lines)

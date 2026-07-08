@@ -231,6 +231,39 @@ def _wrap_payload(name: str, sport_key: str, steps: list[dict[str, Any]]) -> dic
     }
 
 
+def parse_exercise_sets(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize a Garmin exerciseSets payload into flat set rows.
+
+    Pure (fixture-testable). Only ACTIVE sets count; Garmin reports weight in
+    GRAMS (18000.0 = 18 kg) and sometimes logs reps=0 when the watch missed
+    the count — those rows are kept (a set happened) with reps=None."""
+    rows: list[dict[str, Any]] = []
+    for i, s in enumerate(raw.get("exerciseSets") or []):
+        if s.get("setType") != "ACTIVE":
+            continue
+        exercises = s.get("exercises") or [{}]
+        ex = exercises[0]
+        reps = s.get("repetitionCount")
+        weight = s.get("weight")
+        rows.append(
+            {
+                "set_index": i,
+                "category": ex.get("category"),
+                "exercise_name": ex.get("name"),
+                "reps": int(reps) if reps else None,
+                "weight_kg": round(weight / 1000, 2) if weight else None,
+                "duration_sec": s.get("duration"),
+            }
+        )
+    return rows
+
+
+def get_exercise_sets(activity_id: str) -> list[dict[str, Any]]:
+    """ACTIVE sets of a strength activity as normalized rows."""
+    api = client()
+    return parse_exercise_sets(api.get_activity_exercise_sets(activity_id) or {})
+
+
 def build_strength_payload(session: StructuredSession) -> dict[str, Any]:
     """Garmin workout-API JSON for a composed session (verified schema)."""
     steps: list[dict[str, Any]] = []
