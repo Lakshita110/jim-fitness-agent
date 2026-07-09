@@ -42,6 +42,7 @@ SEVERITY_TO_LEVEL = {"none": 0, "mild": 2, "moderate": 5, "severe": 8}
 SEVERITY_WORDS = frozenset(SEVERITY_TO_LEVEL)
 
 _client: Any = None
+_data_source_ids: dict[str, str] = {}
 
 
 def client() -> Any:
@@ -51,6 +52,22 @@ def client() -> Any:
 
         _client = Client(auth=settings().notion_token)
     return _client
+
+
+def _data_source_id(database_id: str) -> str:
+    """Notion's API (2025-09+) queries data sources, not databases directly.
+    Most databases still have exactly one data source; resolve + cache it."""
+    if database_id not in _data_source_ids:
+        db = client().databases.retrieve(database_id=database_id)
+        sources = db.get("data_sources") or []
+        if not sources:
+            raise RuntimeError(f"database {database_id} has no data sources")
+        _data_source_ids[database_id] = sources[0]["id"]
+    return _data_source_ids[database_id]
+
+
+def _query(database_id: str, **kwargs: Any) -> dict[str, Any]:
+    return client().data_sources.query(data_source_id=_data_source_id(database_id), **kwargs)
 
 
 # --- property extraction helpers -------------------------------------------
@@ -120,10 +137,9 @@ def parse_task_page(page: dict[str, Any]) -> str:
 def get_notion_logs(day: date) -> NotionDay:
     """Pain level/location, PT adherence, habits, and tomorrow's planned tasks."""
     cfg = settings()
-    api = client()
 
-    log_rows = api.databases.query(
-        database_id=cfg.notion_knee_log_db_id,
+    log_rows = _query(
+        cfg.notion_knee_log_db_id,
         filter={"property": PROP_DATE, "date": {"equals": day.isoformat()}},
         page_size=1,
     ).get("results", [])
@@ -132,8 +148,8 @@ def get_notion_logs(day: date) -> NotionDay:
     )
 
     tomorrow = (day + timedelta(days=1)).isoformat()
-    task_rows = api.databases.query(
-        database_id=cfg.notion_tasks_db_id,
+    task_rows = _query(
+        cfg.notion_tasks_db_id,
         filter={
             "and": [
                 {

@@ -166,11 +166,17 @@ class CoachDeps:
             client = OpenAI(
                 base_url=OPENROUTER_BASE_URL, api_key=settings().openrouter_api_key
             )
-            kwargs: dict = {"model": MODEL_FAST, "messages": messages}
+            # Always constrain content to JSON — a round that offers tools but
+            # gets a text answer back (model declines to call one) must still
+            # parse; response_format only governs the content field, not
+            # whether the model may emit tool_calls instead.
+            kwargs: dict = {
+                "model": MODEL_FAST,
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+            }
             if tools:
                 kwargs["tools"] = tools
-            else:
-                kwargs["response_format"] = {"type": "json_object"}
             msg = client.chat.completions.create(**kwargs).choices[0].message
             return {
                 "content": msg.content,
