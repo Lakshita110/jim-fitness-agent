@@ -234,6 +234,24 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
 .row-sub .r-date { flex-shrink: 0; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .row-sub .r-steps { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .num { color: var(--data); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* subtle scrollbar so the panel doesn't show the default heavy one */
+.plan-rows { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.16) transparent; overscroll-behavior: contain; }
+.plan-rows::-webkit-scrollbar { width: 8px; }
+.plan-rows::-webkit-scrollbar-track { background: transparent; }
+.plan-rows::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
+.plan-rows::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.20); }
+/* click a day to expand its full workout */
+.row-day.clickable { cursor: pointer; }
+.row-day.clickable:hover { background: rgba(255,255,255,.03); }
+.r-chev { color: var(--muted); font-size: 12px; flex-shrink: 0; transition: transform .2s; }
+.row-day.open > .row-top .r-chev { transform: rotate(90deg); }
+.row-day.open .r-steps { display: none; }
+.row-detail { display: none; margin-top: 8px; padding-left: 45px; }
+.row-day.open .row-detail { display: block; }
+.d-step { font-size: 12.5px; color: var(--ink); padding: 3px 0; line-height: 1.4; }
+.d-step .d-note { color: var(--muted); font-size: 11.5px; }
+.d-why { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 8px;
+         padding-top: 8px; border-top: 1px solid var(--line); }
 .plan-foot { padding: 14px 18px calc(16px + env(safe-area-inset-bottom));
              flex-shrink: 0; position: relative; z-index: 1; }
 #push { width: 100%; padding: 14px; background: transparent; border: 1.5px solid var(--sage);
@@ -326,9 +344,13 @@ const KIND = { strength:"STR", conditioning:"COND", mobility:"PT", rest:"REST" }
 const KIND_FULL = { strength:"Strength", conditioning:"Conditioning", mobility:"PT / mobility", rest:"Rest" };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const rowSig = new Map();
+const openDays = new Set();
 let curReadiness = null, curPain = null, serverToday = null;
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+// Base-workout names carry an em-dash that the model sometimes corrupts to a
+// control char (e.g. "PT Day \x7f Home"); restore it so titles read cleanly.
+function cleanTitle(s) { return String(s).replace(/[\x00-\x1F\x7F]+/g, " — ").replace(/\s+/g, " ").trim(); }
 function isoLocal(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
@@ -356,7 +378,7 @@ function renderCards(draft) {
 
   const next = buildWeek(draft || []).find(d => d.entry && d.entry.kind !== "rest");
   if (next) {
-    document.getElementById("cnMain").textContent = next.entry.title;
+    document.getElementById("cnMain").textContent = cleanTitle(next.entry.title);
     document.getElementById("cnSub").innerHTML =
       `${next.label} · ${KIND_FULL[next.entry.kind] || ""} · <span class="num">${Math.round(next.entry.est_duration_min || 0)}m</span>`;
   } else {
@@ -436,11 +458,24 @@ function buildWeek(draft) {
 }
 function nowHM() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }); }
 
+function detailHtml(entry) {
+  let html = "";
+  if (entry.steps && entry.steps.length) {
+    html += entry.steps.map(x => {
+      const note = x.notes ? `<div class="d-note">${esc(x.notes)}</div>` : "";
+      return `<div class="d-step">${stepLine(x)}${note}</div>`;
+    }).join("");
+  }
+  if (entry.rationale_summary) html += `<div class="d-why">${esc(entry.rationale_summary)}</div>`;
+  return html;
+}
+
 function renderPlan(draft, opts) {
-  const pulseOn = !opts || opts.pulse !== false;
+  opts = opts || {};
+  const pulseOn = opts.pulse !== false;
   const days = buildWeek(draft);
   planRows.innerHTML = "";
-  let nextPeek = null;
+  let nextPeek = null, focusRow = null, todayRow = null;
   for (const day of days) {
     const entry = day.entry, isRest = !entry || entry.kind === "rest";
     const sig = entry ? JSON.stringify([entry.kind, entry.title, entry.est_duration_min, entry.steps]) : "REST";
@@ -449,19 +484,31 @@ function renderPlan(draft, opts) {
     rowSig.set(day.iso, sig);
 
     const typeLabel = isRest ? "—" : (KIND[entry.kind] || "—");
-    const title = isRest ? "Rest" : entry.title;
+    const title = isRest ? "Rest" : cleanTitle(entry.title);
     const dur = (!isRest && entry.est_duration_min) ? `${Math.round(entry.est_duration_min)}m` : "";
     const steps = (!isRest && entry.steps && entry.steps.length) ? entry.steps.map(stepLine).join(" &middot; ") : "";
+    const detail = isRest ? "" : detailHtml(entry);
+    const clickable = !!detail;
+    if (changed && clickable) openDays.add(day.iso);  // auto-open a day that just changed
 
     const row = document.createElement("div");
-    row.className = "row-day" + (day.isToday ? " today" : "") + (isRest ? " rest" : "") + (changed ? " pulse" : "");
+    row.className = "row-day" + (day.isToday ? " today" : "") + (isRest ? " rest" : "")
+      + (changed ? " pulse" : "") + (clickable ? " clickable" : "") + (openDays.has(day.iso) ? " open" : "");
     row.innerHTML =
       `<div class="row-top"><span class="r-type">${typeLabel}</span>` +
-      `<span class="r-title">${esc(title)}</span><span class="r-dur">${dur}</span></div>` +
+      `<span class="r-title">${esc(title)}</span><span class="r-dur">${dur}</span>` +
+      (clickable ? `<span class="r-chev">&rsaquo;</span>` : "") + `</div>` +
       `<div class="row-sub"><span class="r-date">${day.label}</span>` +
-      (steps ? `<span class="r-steps">${steps}</span>` : "") + `</div>`;
+      (steps ? `<span class="r-steps">${steps}</span>` : "") + `</div>` +
+      (detail ? `<div class="row-detail">${detail}</div>` : "");
+    if (clickable) row.addEventListener("click", () => {
+      const nowOpen = row.classList.toggle("open");
+      if (nowOpen) openDays.add(day.iso); else openDays.delete(day.iso);
+    });
     if (changed) row.addEventListener("animationend", () => row.classList.remove("pulse"), { once: true });
     planRows.appendChild(row);
+    if (day.isToday) todayRow = row;
+    if (changed && !focusRow) focusRow = row;
     if (!isRest && !nextPeek) nextPeek = `${day.label} &middot; ${esc(title)} &middot; <span class="num">${dur}</span>`;
   }
   peekText.innerHTML = nextPeek || "Nothing planned this week";
@@ -471,6 +518,14 @@ function renderPlan(draft, opts) {
   pushBtn.textContent = "Push to Garmin";
   planStatus.textContent = hasPlan ? "Draft · not pushed yet" : "Nothing planned yet";
   renderCards(draft);
+
+  if (opts.focus) focusPlan(focusRow || todayRow);
+}
+
+/* Bring the panel and the relevant day into view when the plan changes. */
+function focusPlan(row) {
+  if (window.matchMedia("(max-width: 880px)").matches) planCol.classList.add("expanded");
+  if (row) requestAnimationFrame(() => row.scrollIntoView({ behavior: "smooth", block: "nearest" }));
 }
 async function api(path, body) {
   const r = await fetch(path, { method: "POST", headers: {"Content-Type": "application/json"},
@@ -487,7 +542,7 @@ async function send(text) {
     const data = await api("/chat/message", { text });
     settle(busy, data.reply);
     if (data.today) serverToday = data.today;
-    if (data.draft !== null && data.draft !== undefined) renderPlan(data.draft);
+    if (data.draft !== null && data.draft !== undefined) renderPlan(data.draft, { focus: true });
   } catch (err) { settle(busy, err.message); }
 }
 async function load() {
