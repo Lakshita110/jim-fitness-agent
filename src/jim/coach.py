@@ -449,10 +449,15 @@ def current_state(deps: CoachDeps | None = None) -> dict:
         state = _cached_state(deps)
         readiness = state.get("readiness")
         notion = state.get("notion") or {}
-        if notion.get("pain_level") is not None or notion.get("pain_location"):
+        if (
+            notion.get("pain_level") is not None
+            or notion.get("pain_location")
+            or notion.get("pain_notes")
+        ):
             pain = {
                 "level": notion.get("pain_level"),
                 "location": notion.get("pain_location") or "",
+                "notes": notion.get("pain_notes") or "",
                 "day": notion.get("day"),
             }
     except Exception:

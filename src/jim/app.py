@@ -365,11 +365,14 @@ function renderCards(draft) {
   }
 
   const cp = document.getElementById("cardPain");
-  if (curPain && (curPain.level != null || curPain.location)) {
+  if (curPain && (curPain.level != null || curPain.location || curPain.notes)) {
     cp.hidden = false;
     document.getElementById("cpMain").innerHTML = (curPain.level != null)
-      ? `<span class="num">${curPain.level}/10</span>` : esc(curPain.location);
-    document.getElementById("cpSub").textContent = (curPain.level != null) ? (curPain.location || "") : "";
+      ? `<span class="num">${curPain.level}/10</span>` : esc(curPain.location || curPain.notes);
+    const sub = [];
+    if (curPain.level != null && curPain.location) sub.push(curPain.location);
+    if (curPain.notes && curPain.notes !== (curPain.level != null ? "" : curPain.location)) sub.push(curPain.notes);
+    document.getElementById("cpSub").textContent = sub.join(" · ");
   } else { cp.hidden = true; }
 }
 

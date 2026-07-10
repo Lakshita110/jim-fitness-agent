@@ -148,20 +148,25 @@ def get_notion_logs(day: date) -> NotionDay:
     )
 
     tomorrow = (day + timedelta(days=1)).isoformat()
-    task_rows = _query(
-        cfg.notion_tasks_db_id,
-        filter={
-            "and": [
-                {
-                    "or": [
-                        {"property": PROP_DO_DATE, "date": {"equals": tomorrow}},
-                        {"property": PROP_DUE_DATE, "date": {"equals": tomorrow}},
-                    ]
-                },
-                {"property": PROP_STATUS, "status": {"does_not_equal": "Done"}},
-            ]
-        },
-        page_size=20,
-    ).get("results", [])
-    result.tomorrow_tasks = [t for t in (parse_task_page(p) for p in task_rows) if t]
+    # The tasks DB is optional scheduling context; if it isn't shared with the
+    # integration, degrade to no tasks rather than blanking the whole read.
+    try:
+        task_rows = _query(
+            cfg.notion_tasks_db_id,
+            filter={
+                "and": [
+                    {
+                        "or": [
+                            {"property": PROP_DO_DATE, "date": {"equals": tomorrow}},
+                            {"property": PROP_DUE_DATE, "date": {"equals": tomorrow}},
+                        ]
+                    },
+                    {"property": PROP_STATUS, "status": {"does_not_equal": "Done"}},
+                ]
+            },
+            page_size=20,
+        ).get("results", [])
+        result.tomorrow_tasks = [t for t in (parse_task_page(p) for p in task_rows) if t]
+    except Exception:
+        log.warning("notion tasks db unavailable; continuing without task context", exc_info=True)
     return result
