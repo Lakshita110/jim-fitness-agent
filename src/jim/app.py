@@ -349,8 +349,8 @@ let curReadiness = null, curPain = null, serverToday = null;
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 // Base-workout names carry an em-dash that the model sometimes corrupts to a
-// control char (e.g. "PT Day \x7f Home"); restore it so titles read cleanly.
-function cleanTitle(s) { return String(s).replace(/[\x00-\x1F\x7F]+/g, " — ").replace(/\s+/g, " ").trim(); }
+// control char (e.g. "PT Day <DEL> Home"); restore it so titles read cleanly.
+function cleanTitle(s) { return String(s).replace(/[\\x00-\\x1F\\x7F]+/g, " — ").replace(/\\s+/g, " ").trim(); }
 function isoLocal(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
