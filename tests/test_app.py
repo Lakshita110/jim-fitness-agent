@@ -1,10 +1,21 @@
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 import jim.app as app_mod
 
 client = TestClient(app_mod.app)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_session():
+    """Signing in sets a session cookie, and TestClient keeps cookies — so without
+    this, one test's sign-in would silently authenticate the next test's
+    "bad key must be rejected" assertions."""
+    client.cookies.clear()
+    yield
+    client.cookies.clear()
 
 
 def fake_settings():
@@ -21,9 +32,11 @@ def test_chat_page_requires_key(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     assert client.get("/chat").status_code == 403
     assert client.get("/chat", params={"key": "wrong"}).status_code == 403
+    # A good key signs in: 303 -> /chat, which TestClient follows to the page.
     ok = client.get("/chat", params={"key": "s3cret"})
     assert ok.status_code == 200
     assert "Jim" in ok.text
+    assert str(ok.url).endswith("/chat")  # redirected to the clean URL
 
 
 def test_chat_disabled_without_secret(monkeypatch):
@@ -123,3 +136,53 @@ def test_cron_nightly_shut_when_no_secret_configured(monkeypatch):
     assert client.get(
         "/api/cron/nightly", headers={"Authorization": "Bearer "}
     ).status_code == 403
+
+
+def test_key_signs_in_then_cookie_carries_the_session(monkeypatch):
+    """?key= is a one-time sign-in: it sets the session cookie and redirects to a
+    clean /chat, so the secret stops living in the URL and browser history."""
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    c = TestClient(app_mod.app)
+
+    # No key, no cookie -> shut.
+    assert c.get("/chat", follow_redirects=False).status_code == 403
+
+    # Signing in with the key redirects to the bare /chat and sets the cookie.
+    r = c.get("/chat", params={"key": "s3cret"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/chat"
+    assert app_mod.SESSION_COOKIE in r.cookies
+
+    # The cookie holds a DERIVED token, never the shareable key itself.
+    assert r.cookies[app_mod.SESSION_COOKIE] != "s3cret"
+
+    # From now on the clean URL works, with no key anywhere.
+    page = c.get("/chat")
+    assert page.status_code == 200 and "Jim" in page.text
+    assert "key=" not in page.text  # nothing leaks the secret into the HTML
+
+
+def test_api_routes_accept_the_cookie_without_a_key(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    monkeypatch.setattr(app_mod.coach, "current_state", lambda: {"draft": [], "goals": ""})
+    monkeypatch.setattr(app_mod, "_ready", lambda: None)
+    c = TestClient(app_mod.app)
+
+    assert c.get("/chat/state").status_code == 403  # cold: no cookie
+    c.get("/chat", params={"key": "s3cret"})        # sign in
+    assert c.get("/chat/state").status_code == 200  # cookie alone is enough
+
+
+def test_forged_cookie_is_rejected(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    c = TestClient(app_mod.app)
+    c.cookies.set(app_mod.SESSION_COOKIE, "not-the-real-token")
+    assert c.get("/chat").status_code == 403
+
+
+def test_manifest_is_public_and_carries_no_secret(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    r = client.get("/manifest.webmanifest")
+    assert r.status_code == 200                     # installable without a key
+    assert r.json()["start_url"] == "/chat"         # clean start_url
+    assert "s3cret" not in r.text

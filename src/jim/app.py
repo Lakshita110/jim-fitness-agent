@@ -12,11 +12,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from pydantic import BaseModel
 
 from jim import coach
@@ -101,32 +105,71 @@ def cron_nightly(request: Request) -> dict:
 
 
 # --- Jim's chat ---------------------------------------------------------------
+#
+# Auth is one shared key, presented either way:
+#   1. ?key=<CHAT_SECRET> — the sign-in. Visiting /chat with it sets a cookie and
+#      redirects to a clean /chat.
+#   2. the session cookie — everything after that.
+#
+# The cookie is why the key doesn't have to live in the URL: out of browser
+# history, out of the PWA manifest, and out of any screenshot of the address bar.
+# It holds a token DERIVED from the secret, not the secret itself, so reading the
+# cookie jar doesn't hand over the shareable key.
+
+SESSION_COOKIE = "jim_session"
+SESSION_MAX_AGE = 400 * 24 * 3600  # ~13 months (Chrome caps cookie life at 400d)
 
 
-def _check_key(key: str) -> None:
+def _session_token() -> str:
     secret = settings().chat_secret
-    if not secret or not hmac.compare_digest(key, secret):
+    return hmac.new(secret.encode(), b"jim-session-v1", "sha256").hexdigest()
+
+
+def _authed(request: Request, key: str = "") -> bool:
+    """Valid key in the request, or a valid session cookie."""
+    secret = settings().chat_secret
+    if not secret:  # chat stays disabled until a secret is configured
+        return False
+    if key and hmac.compare_digest(key, secret):
+        return True
+    cookie = request.cookies.get(SESSION_COOKIE, "")
+    return bool(cookie) and hmac.compare_digest(cookie, _session_token())
+
+
+def _require_auth(request: Request, key: str = "") -> None:
+    if not _authed(request, key):
         raise HTTPException(status_code=403, detail="bad or missing chat key")
 
 
+def _set_session(response: Response, secure: bool) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        _session_token(),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,   # JS can't read it, so an XSS can't exfiltrate the session
+        secure=secure,   # https only in prod; must be off on plain-http localhost
+        samesite="lax",
+    )
+
+
 class KeyOnly(BaseModel):
-    key: str
+    key: str = ""
 
 
 class ChatMessage(BaseModel):
-    key: str
+    key: str = ""
     text: str
     scope_date: str | None = None  # ISO date: edit only this day
 
 
 class PushDay(BaseModel):
-    key: str
+    key: str = ""
     date: str  # ISO date of the draft day to push/update
 
 
 @app.post("/chat/message")
-def chat_message(msg: ChatMessage) -> dict:
-    _check_key(msg.key)
+def chat_message(msg: ChatMessage, request: Request) -> dict:
+    _require_auth(request, msg.key)
     if not msg.text.strip():
         raise HTTPException(status_code=400, detail="empty message")
     _ready()
@@ -134,8 +177,8 @@ def chat_message(msg: ChatMessage) -> dict:
 
 
 @app.post("/chat/approve")
-def chat_approve(body: KeyOnly) -> dict:
-    _check_key(body.key)
+def chat_approve(body: KeyOnly, request: Request) -> dict:
+    _require_auth(request, body.key)
     _ready()
     summary = coach.approve()
     state = coach.current_state()
@@ -144,30 +187,31 @@ def chat_approve(body: KeyOnly) -> dict:
 
 
 @app.post("/chat/push-day")
-def chat_push_day(body: PushDay) -> dict:
-    _check_key(body.key)
+def chat_push_day(body: PushDay, request: Request) -> dict:
+    _require_auth(request, body.key)
     _ready()
     return coach.push_day(body.date)
 
 
 @app.post("/chat/clear")
-def chat_clear(body: KeyOnly) -> dict:
-    _check_key(body.key)
+def chat_clear(body: KeyOnly, request: Request) -> dict:
+    _require_auth(request, body.key)
     _ready()
     coach.clear()
     return {"ok": True}
 
 
 @app.get("/chat/state")
-def chat_state(key: str = "") -> dict:
-    _check_key(key)
+def chat_state(request: Request, key: str = "") -> dict:
+    _require_auth(request, key)
     _ready()
     return coach.current_state()
 
 
 # --- home-screen install (DEPLOY.md) -----------------------------------------
-# Icons carry no secret, so they are public — the manifest fetches them without
-# a key. The manifest itself embeds the chat key in start_url, so it is gated.
+# Neither the icons nor the manifest carry a secret any more (start_url is the
+# bare /chat, authenticated by cookie), so both are public. That also means the
+# browser can fetch them during install without needing to send credentials.
 
 
 @app.get("/icon-{size}.png")
@@ -182,16 +226,15 @@ def icon(size: int) -> Response:
 
 
 @app.get("/manifest.webmanifest")
-def manifest(key: str = "") -> JSONResponse:
-    _check_key(key)
-    # start_url carries the key so the installed app opens straight into the
-    # chat — tapping the home-screen icon should never land on a 403.
+def manifest() -> JSONResponse:
+    # No key anywhere in here — start_url is the clean /chat and the installed app
+    # authenticates with its session cookie. Nothing secret, so it needs no gate.
     return JSONResponse(
         {
             "name": "Jim — training coach",
             "short_name": "Jim",
             "description": "Your training partner in crime.",
-            "start_url": f"/chat?key={quote(key)}",
+            "start_url": "/chat",
             "scope": "/",
             "display": "standalone",
             "orientation": "portrait",
@@ -212,7 +255,7 @@ CHAT_PAGE = """<!doctype html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0F100D">
 <title>Jim</title>
-<link rel="manifest" href="__MANIFEST_HREF__">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" type="image/png" href="/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -489,7 +532,8 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
   </div>
 </div>
 <script>
-const key = new URLSearchParams(location.search).get("key") || "";
+// No key in the page: the session cookie authenticates every request. fetch()
+// sends same-origin cookies by default, so there is nothing to pass around.
 const log = document.getElementById("log"), t = document.getElementById("t");
 const planCol = document.getElementById("planCol"), peek = document.getElementById("peek");
 const peekText = document.getElementById("peekText");
@@ -722,7 +766,7 @@ function focusPlan(row) {
 }
 async function api(path, body) {
   const r = await fetch(path, { method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ key, ...body }) });
+    body: JSON.stringify({ ...body }) });
   const data = await r.json();
   if (!r.ok) throw new Error(data.detail || "error");
   return data;
@@ -765,7 +809,7 @@ async function send(text) {
 async function load() {
   rowSig.clear();
   try {
-    const r = await fetch(`/chat/state?key=${encodeURIComponent(key)}`);
+    const r = await fetch("/chat/state");
     const s = await r.json();
     if (!r.ok) { add("bot", s.detail || "error"); return; }
     curReadiness = s.readiness || null;
@@ -815,9 +859,14 @@ load();
 </script></body></html>"""
 
 
-@app.get("/chat", response_class=HTMLResponse)
-def chat_page(key: str = "") -> str:
-    _check_key(key)
-    # The manifest link needs the key at render time (it can't be added later —
-    # the browser reads it when the user taps "Add to Home Screen").
-    return CHAT_PAGE.replace("__MANIFEST_HREF__", f"/manifest.webmanifest?key={quote(key)}")
+@app.get("/chat")
+def chat_page(request: Request, key: str = "") -> Response:
+    """Signing in with ?key= sets the session cookie and bounces to a clean /chat,
+    so the secret is never left sitting in the address bar or browser history.
+    After that the cookie carries it and the URL is just /chat."""
+    _require_auth(request, key)
+    if key:
+        redirect = RedirectResponse("/chat", status_code=303)
+        _set_session(redirect, secure=request.url.scheme == "https")
+        return redirect
+    return HTMLResponse(CHAT_PAGE)
