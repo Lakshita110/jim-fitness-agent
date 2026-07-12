@@ -8,7 +8,9 @@ client = TestClient(app_mod.app)
 
 
 def fake_settings():
-    return SimpleNamespace(chat_secret="s3cret", app_timezone="America/New_York")
+    return SimpleNamespace(
+        chat_secret="s3cret", app_timezone="America/New_York", cron_secret="cr0n"
+    )
 
 
 def test_health():
@@ -86,3 +88,38 @@ def test_chat_push_day(monkeypatch):
     assert r.json()["summary"] == "Pushed 2026-07-14"
     assert r.json()["push_status"] == {"2026-07-14": "pushed"}
     assert client.post("/chat/push-day", json={"key": "bad", "date": "x"}).status_code == 403
+
+
+def test_cron_nightly_requires_vercel_bearer(monkeypatch):
+    """Vercel Cron authenticates with `Authorization: Bearer $CRON_SECRET`. An
+    unauthenticated endpoint would let anyone burn LLM spend and rewrite the plan."""
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    import jim.jobs.nightly as nightly_mod
+
+    ran = []
+    monkeypatch.setattr(
+        nightly_mod, "run_nightly",
+        lambda: ran.append(True) or {"for_date": "2026-07-13", "elapsed_sec": 12.3},
+    )
+
+    assert client.get("/api/cron/nightly").status_code == 403
+    assert client.get(
+        "/api/cron/nightly", headers={"Authorization": "Bearer wrong"}
+    ).status_code == 403
+    assert ran == []  # neither attempt executed the job
+
+    r = client.get("/api/cron/nightly", headers={"Authorization": "Bearer cr0n"})
+    assert r.status_code == 200
+    assert r.json()["elapsed_sec"] == 12.3
+    assert ran == [True]
+
+
+def test_cron_nightly_shut_when_no_secret_configured(monkeypatch):
+    """No CRON_SECRET => endpoint stays closed, rather than defaulting to open."""
+    monkeypatch.setattr(
+        app_mod, "settings",
+        lambda: SimpleNamespace(chat_secret="s3cret", app_timezone="UTC", cron_secret=""),
+    )
+    assert client.get(
+        "/api/cron/nightly", headers={"Authorization": "Bearer "}
+    ).status_code == 403

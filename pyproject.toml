@@ -31,9 +31,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Home-screen icons are served by the app, so they must ship with the package.
+# Both are read at runtime, so they must ship inside the package — a serverless
+# bundle (and any non-editable install) includes package data but not loose
+# top-level directories.
 [tool.setuptools.package-data]
-jim = ["static/*.png"]
+jim = ["static/*.png", "migrations/*.sql"]
 
 [tool.ruff]
 line-length = 100

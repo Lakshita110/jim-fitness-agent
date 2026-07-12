@@ -71,10 +71,13 @@ python scripts/backfill.py 90     # backfill Garmin history into Postgres
 
 ## Deploy
 
-**[DEPLOY.md](DEPLOY.md)** — one Render blueprint (`render.yaml`) creates
-Postgres + the web service + the nightly cron; migrations run on boot. Then
-install the chat to your phone's home screen as a PWA.
+**[DEPLOY.md](DEPLOY.md)** — Vercel serves the chat (`vercel.json` +
+`api/index.py`), Neon is the database, and Vercel Cron hits `/api/cron/nightly`.
+Then install the chat to your phone's home screen as a PWA.
 
-Two things that bite if you skip the guide: a container can't do a Garmin SSO
-login (no stdin for MFA), so it authenticates from a `GARMIN_TOKENS` session blob
-(`python scripts/garmin_login.py --export`); and the cron `schedule` is UTC.
+Three things that bite if you skip the guide. Serverless has no reliable startup
+hook, so migrations run on the request path (`db.ensure_migrated()`), not at boot.
+A function can't do a Garmin SSO login — no stdin to answer MFA — so it uses a
+`GARMIN_TOKENS` session blob (`python scripts/garmin_login.py --export`). And the
+nightly must finish inside the function's `maxDuration`; the endpoint returns
+`elapsed_sec` so you can watch for it.

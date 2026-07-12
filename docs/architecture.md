@@ -12,7 +12,7 @@ flowchart TB
         NOTIONAPP["Notion<br/>(habit journal, tasks)"]
     end
 
-    subgraph render["Render"]
+    subgraph vercel["Vercel"]
         subgraph web["web service (FastAPI)"]
             CHATUI["/chat page + API<br/>CHAT_SECRET"]
             COACH["coach.py<br/>conversation engine<br/>MODEL_FAST via OpenRouter"]

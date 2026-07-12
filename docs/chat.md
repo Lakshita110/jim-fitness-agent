@@ -9,7 +9,7 @@ until you hit Push to Garmin**.
 1. Set `CHAT_SECRET` in the environment (long random string; chat is disabled
    without it). `OPENROUTER_API_KEY` must also be set — the conversation runs
    on the cheap tier (`MODEL_FAST`).
-2. Open `https://<your-service>.onrender.com/chat?key=<CHAT_SECRET>`.
+2. Open `https://<your-app>.vercel.app/chat?key=<CHAT_SECRET>`.
 3. On your phone: **Add to Home Screen** — it opens full-screen like an app.
 
 ## How it behaves

@@ -1,10 +1,7 @@
 """Thin FastAPI service (PLAN.md §5): health check, manual nightly trigger, and
 Jim's chat — a private, mobile-friendly page (add to home screen) where the
-athlete iterates on plans and pushes them to Garmin on approve.
-
-Deployed on Vercel as a single serverless function (api/index.py), so the nightly
-job is exposed here as /api/cron/nightly for Vercel Cron to ping, and migrations
-are ensured on the request path rather than at startup (see db.ensure_migrated)."""
+athlete iterates on plans and pushes them to Garmin on approve. The agent is a
+callable, not tied to HTTP — Render Cron invokes the nightly job directly."""
 
 import hmac
 import logging

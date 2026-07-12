@@ -1,0 +1,7 @@
+# Vercel installs this at build time (its Python runtime reads requirements.txt,
+# not pyproject.toml). The single "." installs THIS project from pyproject.toml,
+# which brings in every runtime dependency AND ships the package data — the SQL
+# migrations and the home-screen icons — inside the serverless bundle.
+#
+# Dependencies are declared once, in pyproject.toml. Don't duplicate them here.
+.
