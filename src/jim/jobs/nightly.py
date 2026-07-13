@@ -36,6 +36,20 @@ def store_exercise_sets(conn, activity_id: str, day, sets: list[dict]) -> None:
         )
 
 
+def store_notion_log(conn, notion) -> None:
+    """Upsert one day of the knee/habit log. Shared with scripts/backfill.py."""
+    conn.execute(
+        "INSERT INTO notion_daily_log (day, pain_level, pain_location, pain_notes,"
+        " pt_done, habits, day_score) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        " ON CONFLICT (day) DO UPDATE SET pain_level=EXCLUDED.pain_level,"
+        " pain_location=EXCLUDED.pain_location, pain_notes=EXCLUDED.pain_notes,"
+        " pt_done=EXCLUDED.pt_done, habits=EXCLUDED.habits,"
+        " day_score=EXCLUDED.day_score",
+        (notion.day, notion.pain_level, notion.pain_location, notion.pain_notes,
+         notion.pt_done, json.dumps(notion.habits), notion.day_score),
+    )
+
+
 def sync_today() -> None:
     """Persist today's Garmin + Notion state so query_history has fresh rows."""
     from jim.tools.garmin import get_exercise_sets, get_garmin_today
@@ -70,16 +84,7 @@ def sync_today() -> None:
                     )
                 except Exception:
                     log.exception("exercise sets fetch failed for %s", act.activity_id)
-        conn.execute(
-            "INSERT INTO notion_daily_log (day, pain_level, pain_location, pain_notes,"
-            " pt_done, habits, day_score) VALUES (%s, %s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT (day) DO UPDATE SET pain_level=EXCLUDED.pain_level,"
-            " pain_location=EXCLUDED.pain_location, pain_notes=EXCLUDED.pain_notes,"
-            " pt_done=EXCLUDED.pt_done, habits=EXCLUDED.habits,"
-            " day_score=EXCLUDED.day_score",
-            (today, notion.pain_level, notion.pain_location, notion.pain_notes,
-             notion.pt_done, json.dumps(notion.habits), notion.day_score),
-        )
+        store_notion_log(conn, notion)
         conn.commit()
 
 

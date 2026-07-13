@@ -137,3 +137,41 @@ def get_notion_logs(day: date) -> NotionDay:
         page_size=1,
     ).get("results", [])
     return parse_knee_log_page(rows[0], day) if rows else NotionDay(day=day)
+
+
+def page_date(page: dict[str, Any]) -> date | None:
+    """The `date` property of a log page, or None if it is unset."""
+    start = (_prop(page, PROP_DATE).get("date") or {}).get("start")
+    if not start:
+        return None
+    return date.fromisoformat(start[:10])
+
+
+def get_notion_logs_range(start: date, end: date) -> list[NotionDay]:
+    """Every log page in [start, end], newest first. One paged range query
+    rather than a filtered call per day — a 90-day backfill is otherwise 90
+    round-trips. Days with no page are simply absent from the list."""
+    cfg = settings()
+    days: list[NotionDay] = []
+    cursor: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {
+            "filter": {
+                "and": [
+                    {"property": PROP_DATE, "date": {"on_or_after": start.isoformat()}},
+                    {"property": PROP_DATE, "date": {"on_or_before": end.isoformat()}},
+                ]
+            },
+            "sorts": [{"property": PROP_DATE, "direction": "descending"}],
+            "page_size": 100,
+        }
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = _query(cfg.notion_knee_log_db_id, **kwargs)
+        for page in resp.get("results", []):
+            day = page_date(page)
+            if day is not None:
+                days.append(parse_knee_log_page(page, day))
+        if not resp.get("has_more"):
+            return days
+        cursor = resp.get("next_cursor")

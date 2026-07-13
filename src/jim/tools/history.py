@@ -3,28 +3,79 @@
 All computation is pure Python over plain dict rows so it unit-tests without a
 database; `query_history` is the thin DB-backed wrapper the agent calls."""
 
+import re
+from collections import Counter
 from datetime import date, timedelta
 from typing import Any
 
 from jim.schemas import HistoryFeatures, ReadinessRead
 
-# Activity/exercise name fragments -> coarse muscle group. Deliberately coarse:
-# the balance feature only needs to expose "you haven't touched X in a while".
+# Exercise-name stems -> coarse muscle group. Deliberately coarse: the balance
+# feature only needs to expose "you haven't touched X in a while".
+#
+# Matched at a WORD BOUNDARY, prefix-style: "leg" hits LEG_EXTENSIONS and
+# "legs", but "ab" must not hit c-AB-le — plain substring matching scored every
+# CABLE_* movement as abs.
 MUSCLE_GROUPS: dict[str, tuple[str, ...]] = {
-    "legs": ("squat", "lunge", "leg", "deadlift", "hip", "calf", "glute", "step-up"),
-    "push": ("bench", "press", "push", "dip", "tricep"),
-    "pull": ("row", "pull", "chin", "curl", "lat"),
-    "core": ("core", "plank", "ab", "carry"),
-    "conditioning": ("run", "bike", "cycling", "row_erg", "swim", "cardio", "walk", "elliptical"),
+    "legs": ("squat", "lunge", "leg", "deadlift", "hip", "calf", "glute", "step"),
+    "push": ("bench", "press", "push", "dip", "tricep", "chest", "fly", "crossover"),
+    "pull": ("row", "pull", "chin", "curl", "shrug", "lat pulldown"),
+    "core": ("core", "plank", "ab", "carry", "crunch", "sit up", "situp"),
+    "conditioning": ("run", "bike", "cycling", "swim", "cardio", "walk", "elliptical"),
+}
+
+_GROUP_RE: dict[str, re.Pattern[str]] = {
+    group: re.compile(r"\b(?:" + "|".join(re.escape(n) for n in needles) + r")")
+    for group, needles in MUSCLE_GROUPS.items()
+}
+
+# Garmin activity types are a known, finite vocabulary — map them explicitly.
+# Substring guessing misreads them ("indoor_rowing" contains "row", which would
+# score an erg session as back work).
+ACTIVITY_GROUPS: dict[str, str] = {
+    "cycling": "conditioning", "indoor_cycling": "conditioning",
+    "running": "conditioning", "treadmill_running": "conditioning",
+    "trail_running": "conditioning", "walking": "conditioning",
+    "hiking": "conditioning", "indoor_cardio": "conditioning",
+    "elliptical": "conditioning", "indoor_rowing": "conditioning",
+    "stair_climbing": "conditioning", "swimming": "conditioning",
+    "lap_swimming": "conditioning", "pickleball": "conditioning",
+    "badminton": "conditioning", "tennis": "conditioning",
+    "mobility": "mobility", "yoga": "mobility", "pilates": "mobility",
+    "stretching": "mobility",
+    # A strength session's type says nothing about what it trained; the muscles
+    # live in its logged sets. Only used when no sets came back.
+    "strength_training": "strength", "fitness_equipment": "strength",
 }
 
 
 def classify_muscle_group(name: str) -> str:
-    lowered = name.lower()
-    for group, needles in MUSCLE_GROUPS.items():
-        if any(n in lowered for n in needles):
+    """Coarse group for a single *exercise* name. Separator-insensitive, so
+    "DUMBBELL_STEP_UP" and "step-up" land the same way."""
+    lowered = re.sub(r"[^a-z0-9]+", " ", name.lower())
+    for group, pattern in _GROUP_RE.items():
+        if pattern.search(lowered):
             return group
     return "other"
+
+
+def activity_groups(activity: dict[str, Any]) -> dict[str, float]:
+    """How one activity's minutes split across muscle groups (fractions summing to 1).
+
+    A strength session is logged as type "strength_training" with the real muscle
+    information one level down in its sets, so a type-only read reports 20 leg
+    sessions as "never trained legs" — dangerous on a knee-pain plan. When sets
+    are present, split by them; otherwise fall back to the activity type."""
+    exercises = activity.get("exercises") or []
+    if exercises:
+        counts = Counter(classify_muscle_group(name) for name in exercises)
+        counts.pop("other", None)
+        total = sum(counts.values())
+        if total:
+            return {group: n / total for group, n in counts.items()}
+
+    type_ = str(activity.get("type") or "").strip().lower()
+    return {ACTIVITY_GROUPS.get(type_) or classify_muscle_group(type_): 1.0}
 
 
 def weekly_volume_min(activities: list[dict[str, Any]], as_of: date) -> float:
@@ -38,14 +89,16 @@ def weekly_volume_min(activities: list[dict[str, Any]], as_of: date) -> float:
 
 
 def muscle_group_balance(activities: list[dict[str, Any]], as_of: date) -> dict[str, float]:
-    """Fraction of the last 7 days' volume per muscle group."""
+    """Fraction of the last 7 days' volume per muscle group. A mixed strength
+    session splits its minutes across the groups its sets actually hit."""
     start = as_of - timedelta(days=6)
     totals: dict[str, float] = {}
     for a in activities:
         if not (start <= a["day"] <= as_of):
             continue
-        group = classify_muscle_group(str(a.get("type", "")))
-        totals[group] = totals.get(group, 0.0) + float(a.get("duration_min") or 0)
+        minutes = float(a.get("duration_min") or 0)
+        for group, share in activity_groups(a).items():
+            totals[group] = totals.get(group, 0.0) + minutes * share
     grand = sum(totals.values())
     if grand == 0:
         return {}
@@ -53,10 +106,11 @@ def muscle_group_balance(activities: list[dict[str, Any]], as_of: date) -> dict[
 
 
 def days_since_legs(activities: list[dict[str, Any]], as_of: date) -> int | None:
+    """Days since the last session containing *any* leg work."""
     leg_days = [
         a["day"]
         for a in activities
-        if classify_muscle_group(str(a.get("type", ""))) == "legs" and a["day"] <= as_of
+        if a["day"] <= as_of and activity_groups(a).get("legs", 0) > 0
     ]
     if not leg_days:
         return None
@@ -112,7 +166,14 @@ def compute_features(
     daily: list[dict[str, Any]],
 ) -> HistoryFeatures:
     """Pure assembly of all deterministic features from pre-fetched rows."""
-    readiness = [d["readiness"] for d in daily if d.get("readiness") is not None]
+    # Garmin only reports Training Readiness on some devices — this athlete's
+    # watch never does, so a readiness-only average is permanently None. Body
+    # battery is the same 0-100 recovery read, and is always present.
+    recovery = [
+        d.get("readiness") if d.get("readiness") is not None else d.get("body_battery")
+        for d in daily
+    ]
+    readiness = [r for r in recovery if r is not None]
     return HistoryFeatures(
         as_of=as_of,
         window_days=window_days,
@@ -133,7 +194,13 @@ def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
     start = as_of - timedelta(days=window_days - 1)
     with connect() as conn:
         activities = conn.execute(
-            "SELECT day, type, duration_min FROM garmin_activities"
+            "SELECT activity_id, day, type, duration_min FROM garmin_activities"
+            " WHERE day BETWEEN %s AND %s",
+            (start, as_of),
+        ).fetchall()
+        # The muscles a strength session trained live in its sets, not its type.
+        sets = conn.execute(
+            "SELECT activity_id, exercise_name, category FROM exercise_sets"
             " WHERE day BETWEEN %s AND %s",
             (start, as_of),
         ).fetchall()
@@ -143,9 +210,19 @@ def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
             (start, as_of),
         ).fetchall()
         daily = conn.execute(
-            "SELECT day, readiness FROM garmin_daily WHERE day BETWEEN %s AND %s",
+            "SELECT day, readiness, body_battery FROM garmin_daily"
+            " WHERE day BETWEEN %s AND %s",
             (start, as_of),
         ).fetchall()
+
+    by_activity: dict[str, list[str]] = {}
+    for s in sets:
+        name = s.get("exercise_name") or s.get("category")
+        if name:
+            by_activity.setdefault(s["activity_id"], []).append(name)
+    for a in activities:
+        a["exercises"] = by_activity.get(a["activity_id"], [])
+
     return compute_features(as_of, window_days, activities, logs, daily)
 
 

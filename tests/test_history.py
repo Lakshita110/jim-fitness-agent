@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 from jim.tools.history import (
+    activity_groups,
     classify_muscle_group,
     compute_features,
     compute_readiness,
@@ -31,6 +32,77 @@ def test_classify_muscle_group():
     assert classify_muscle_group("Bench Press") == "push"
     assert classify_muscle_group("running") == "conditioning"
     assert classify_muscle_group("mystery move") == "other"
+
+
+def test_classify_muscle_group_ignores_separators():
+    """Garmin logs sets as DUMBBELL_STEP_UP; a hyphenated needle missed them."""
+    assert classify_muscle_group("DUMBBELL_STEP_UP") == "legs"
+    assert classify_muscle_group("ROMANIAN_DEADLIFT") == "legs"
+    assert classify_muscle_group("BANDED_PULL_UPS") == "pull"
+    assert classify_muscle_group("LAT_PULLDOWN") == "pull"
+
+
+def test_needles_match_on_word_boundaries_not_mid_word():
+    """"ab" matched the middle of c-AB-le, so every cable movement scored as abs."""
+    assert classify_muscle_group("CABLE_CROSSOVER") == "push"
+    assert classify_muscle_group("SEATED_CABLE_ROW") == "pull"
+    assert classify_muscle_group("CABLE_CURL") == "pull"
+    # ...while genuine ab work still lands in core
+    assert classify_muscle_group("AB_WHEEL") == "core"
+    assert classify_muscle_group("ABS") == "core"
+
+
+def test_classify_covers_the_real_logged_movements():
+    """Names taken verbatim from the athlete's Garmin sets — these fell through
+    to "other" and vanished from the balance."""
+    for name, group in [
+        ("DUMBBELL_FLYE", "push"),
+        ("SHRUG", "pull"),
+        ("SIT_UP", "core"),
+        ("TRICEPS_EXTENSION", "push"),
+        ("SHOULDER_PRESS", "push"),
+        ("LEG_EXTENSIONS", "legs"),
+    ]:
+        assert classify_muscle_group(name) == group, name
+
+
+def test_activity_groups_reads_muscles_from_the_sets():
+    """A strength session's type is just "strength_training" — without reading
+    its sets, 20 leg sessions look like "never trained legs"."""
+    act = {"day": AS_OF, "type": "strength_training", "duration_min": 60,
+           "exercises": ["BARBELL_SQUAT", "ROMANIAN_DEADLIFT", "BENCH_PRESS", "MYSTERY"]}
+    groups = activity_groups(act)
+    assert groups == {"legs": 2 / 3, "push": 1 / 3}   # unclassifiable set dropped
+    assert abs(sum(groups.values()) - 1.0) < 1e-9
+
+
+def test_activity_groups_falls_back_to_type_without_sets():
+    assert activity_groups({"type": "cycling"}) == {"conditioning": 1.0}
+    assert activity_groups({"type": "mobility"}) == {"mobility": 1.0}
+    assert activity_groups({"type": "yoga"}) == {"mobility": 1.0}
+    # a strength session with no logged sets is honest about being unsplit
+    assert activity_groups({"type": "strength_training"}) == {"strength": 1.0}
+
+
+def test_indoor_rowing_is_conditioning_not_back_work():
+    """Substring matching scored the erg as "pull" because it contains "row"."""
+    assert activity_groups({"type": "indoor_rowing"}) == {"conditioning": 1.0}
+
+
+def test_days_since_legs_sees_legs_inside_a_strength_session():
+    acts = [
+        {"day": date(2026, 7, 5), "type": "strength_training", "duration_min": 60,
+         "exercises": ["LEG_EXTENSIONS", "LAT_PULLDOWN"]},
+        {"day": AS_OF, "type": "cycling", "duration_min": 45, "exercises": []},
+    ]
+    assert days_since_legs(acts, AS_OF) == 1
+
+
+def test_muscle_group_balance_splits_a_mixed_session():
+    acts = [{"day": AS_OF, "type": "strength_training", "duration_min": 60,
+             "exercises": ["SQUAT", "SQUAT", "BENCH_PRESS", "BARBELL_ROW"]}]
+    balance = muscle_group_balance(acts, AS_OF)
+    assert balance == {"legs": 0.5, "push": 0.25, "pull": 0.25}
 
 
 def test_weekly_volume_only_counts_last_7_days():
@@ -101,6 +173,22 @@ def test_compute_features_assembles_everything():
     assert f.weekly_volume_min == 115
     assert f.days_since_legs == 0
     assert f.avg_readiness == 50
+
+
+def test_avg_readiness_falls_back_to_body_battery():
+    """This athlete's watch never reports Training Readiness — readiness is null
+    on every row — so a readiness-only average was permanently None."""
+    daily = [
+        {"day": AS_OF, "readiness": None, "body_battery": 70},
+        {"day": date(2026, 7, 5), "readiness": None, "body_battery": 30},
+    ]
+    f = compute_features(AS_OF, 28, [], [], daily)
+    assert f.avg_readiness == 50
+
+
+def test_avg_readiness_prefers_readiness_when_present():
+    daily = [{"day": AS_OF, "readiness": 80, "body_battery": 20}]
+    assert compute_features(AS_OF, 28, [], [], daily).avg_readiness == 80
 
 
 # --- load & readiness verdict ---------------------------------------------

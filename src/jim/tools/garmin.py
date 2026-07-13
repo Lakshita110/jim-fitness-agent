@@ -67,6 +67,22 @@ def client() -> Any:
     return _client
 
 
+def body_battery_recovered(stats: dict) -> int | None:
+    """How charged the athlete woke up — the recovery read worth planning from.
+
+    Body battery drains all day, so "bodyBatteryMostRecentValue" is whatever was
+    left at the last sync (typically single digits by bedtime). Reading that as
+    recovery put ~84% of days under the "poor recovery" threshold and had the
+    coach prescribing rest almost every day. Prefer the value at wake, then the
+    day's peak, and only fall back to the most-recent reading."""
+    for key in ("bodyBatteryAtWakeTime", "bodyBatteryHighestValue",
+                "bodyBatteryMostRecentValue"):
+        value = stats.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def get_garmin_today(day: date) -> GarminToday:
     """Activities + recovery for `day`. Computation done here; returns summary."""
     api = client()
@@ -93,7 +109,7 @@ def get_garmin_today(day: date) -> GarminToday:
         activities=activities,
         hrv=hrv,
         sleep_hours=round(sleep_sec / 3600, 1) if sleep_sec else None,
-        body_battery=stats.get("bodyBatteryMostRecentValue"),
+        body_battery=body_battery_recovered(stats),
         readiness=stats.get("trainingReadinessScore"),
         resting_hr=stats.get("restingHeartRate"),
     )
