@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from jim.agent.validate import validate
+from jim.agent.validate import validate_plan, weekly_budget
 from jim.config import (
     FORBIDDEN_EXERCISES,
     MAX_SESSION_MIN,
@@ -379,6 +379,10 @@ def _system_prompt(deps: CoachDeps, state: dict) -> str:
     today = deps.now().date()
     goals = deps.kv_get("goals") or "(no long-term goals recorded yet)"
     draft = deps.kv_get("draft") or []
+    # Spell out the volume budget the validator will enforce. Left to infer it,
+    # the model guesses, overshoots, and burns a revision round being told the
+    # number it could have had up front.
+    budget = weekly_budget(_features(state, today))
     parts = [
         SYSTEM_PROMPT.format(
             forbidden=", ".join(FORBIDDEN_EXERCISES),
@@ -387,6 +391,9 @@ def _system_prompt(deps: CoachDeps, state: dict) -> str:
             max_days=DRAFT_MAX_DAYS,
             today=today.isoformat(),
         ),
+        f"# VOLUME BUDGET\nThe whole plan may total at most {budget:.0f} minutes"
+        " across all its days combined (this is a WEEKLY allowance, not a per-day"
+        " one). Rest days cost nothing. Size the week to fit inside it.",
         "# TODAY'S STATE\n" + json.dumps(state),
         "# LONG-TERM GOALS\n" + goals,
         "# CURRENT DRAFT\n" + (json.dumps(draft) if draft else "(empty)"),
@@ -474,13 +481,19 @@ def converse(text: str, deps: CoachDeps | None = None,
         if not out["draft"]:
             deps.kv_set("draft", [])
         else:
-            sessions = _parse_draft(out["draft"], today)
             features = _features(state, today)
-            violations = {
-                s.for_date.isoformat(): result.violations
-                for s in sessions
-                if not (result := validate(s, features)).ok
-            }
+            existing = _parse_draft(deps.kv_get("draft") or [], today)
+
+            def merge(new: list[StructuredSession]) -> list[StructuredSession]:
+                by_date = {s.for_date.isoformat(): s for s in existing}
+                for s in new:
+                    by_date[s.for_date.isoformat()] = s
+                return [by_date[k] for k in sorted(by_date)][:DRAFT_MAX_DAYS]
+
+            # Validate the merged plan — that's what gets saved, and the weekly
+            # budget only means anything across the whole week.
+            plan = merge(_parse_draft(out["draft"], today))
+            violations = validate_plan(plan, features)
             if violations:
                 history.append({"role": "assistant", "content": json.dumps(out)})
                 history.append({
@@ -491,19 +504,17 @@ def converse(text: str, deps: CoachDeps | None = None,
                 try:
                     out = _run_model(deps, system, history)
                     reply = str(out.get("reply") or reply)[:MAX_REPLY_CHARS]
-                    sessions = _parse_draft(out.get("draft") or [], today)
+                    plan = merge(_parse_draft(out.get("draft") or [], today))
                 except Exception:
                     log.exception("revision turn failed")
-                kept = [s for s in sessions if validate(s, _features(state, today)).ok]
-                if len(kept) < len(sessions):
-                    reply += "\n(I dropped day(s) that still broke the safety rules.)"
-                sessions = kept
-            merged = {s.for_date.isoformat(): s
-                      for s in _parse_draft(deps.kv_get("draft") or [], today)}
-            for s in sessions:
-                merged[s.for_date.isoformat()] = s
-            ordered = [merged[k] for k in sorted(merged)][:DRAFT_MAX_DAYS]
-            deps.kv_set("draft", [s.model_dump(mode="json") for s in ordered])
+                violations = validate_plan(plan, features)
+                if violations:
+                    plan = [s for s in plan if s.for_date.isoformat() not in violations]
+                    reply += "\n(Dropped " + ", ".join(
+                        f"{d} — {v[0]}" for d, v in sorted(violations.items())
+                    ) + ")"
+
+            deps.kv_set("draft", [s.model_dump(mode="json") for s in plan])
 
     history.append({"role": "assistant", "content": reply})
     deps.kv_set("chat_history", history[-HISTORY_LIMIT:])

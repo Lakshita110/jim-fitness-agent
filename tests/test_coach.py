@@ -45,6 +45,10 @@ class Fakes:
         self.created: list = []
         self.recorded: list = []
         self.lookups = lookups or {}
+        self.state: dict = {"features": {"as_of": TODAY.isoformat(),
+                                         "window_days": 28,
+                                         "weekly_volume_min": 200,
+                                         "days_since_legs": 3}}
 
     def deps(self) -> CoachDeps:
         def llm(messages, tools=None):
@@ -65,10 +69,7 @@ class Fakes:
         return CoachDeps(
             kv_get=self.kv.get,
             kv_set=self.kv.__setitem__,
-            fetch_state=lambda: {"features": {"as_of": TODAY.isoformat(),
-                                              "window_days": 28,
-                                              "weekly_volume_min": 200,
-                                              "days_since_legs": 3}},
+            fetch_state=lambda: self.state,
             llm=llm,
             lookup_tools=self.lookups,
             schedule_workout=lambda wid, on: self.scheduled.append((wid, on)),
@@ -125,14 +126,35 @@ def test_invalid_day_triggers_revision_then_drops_if_still_bad():
     out = converse("plan tomorrow", f.deps())
     assert len(f.llm_calls) == 2  # one revision attempt
     assert out["draft"] == []  # still-invalid day dropped
-    assert "safety rules" in out["reply"]
+    # the reply names the date and the reason, rather than a vague "some day(s)"
+    assert "2026-07-09" in out["reply"]
+    assert "forbidden exercise" in out["reply"]
 
 
 def test_draft_capped_at_seven_days():
+    # Short days, so the weekly volume budget isn't the binding constraint here
+    # — this is isolating the DRAFT_MAX_DAYS truncation.
     f = Fakes([{"reply": "two weeks!", "goals": None,
-                "draft": [day(f"2026-07-{9 + i:02d}") for i in range(10)]}])
+                "draft": [day(f"2026-07-{9 + i:02d}", est_duration_min=20)
+                          for i in range(10)]}])
     out = converse("plan two weeks", f.deps())
     assert len(out["draft"]) == 7
+
+
+def test_weekly_budget_is_spent_across_the_plan_not_per_day():
+    """The athlete's bug: a full Mon-Fri plan couldn't be built because each day
+    was tested against the whole week's headroom. A week that fits the budget in
+    total must now survive intact."""
+    f = Fakes([{"reply": "here's your week", "goals": None,
+                "draft": [day(f"2026-07-{13 + i:02d}", est_duration_min=45)
+                          for i in range(5)]}])
+    # trailing 400 min -> budget 400*1.1+30 = 470; the plan totals 225
+    f.state["features"] = {"as_of": "2026-07-12", "window_days": 28,
+                           "weekly_volume_min": 400, "days_since_legs": None}
+    out = converse("plan monday to friday", f.deps())
+    assert len(f.llm_calls) == 1          # no revision needed
+    assert len(out["draft"]) == 5         # every day survived
+    assert "Dropped" not in out["reply"]
 
 
 def test_null_draft_keeps_current_one():
@@ -326,3 +348,15 @@ def test_format_duration_prefers_minutes_over_long_second_counts():
     assert format_duration(1800) == "30m"  # not "1800s"
     assert format_duration(90) == "2m"     # rounded, not "1.5m"
     assert format_duration(None) == "0s"
+
+
+def test_system_prompt_states_the_volume_budget():
+    """Left to infer the budget, the model overshoots and wastes a revision round
+    being told a number it could have had up front."""
+    f = Fakes([{"reply": "ok", "draft": None, "goals": None}])
+    f.state["features"] = {"as_of": "2026-07-12", "window_days": 28,
+                           "weekly_volume_min": 400, "days_since_legs": None}
+    converse("plan my week", f.deps())
+    system = f.llm_calls[0][0]["content"]
+    assert "470 minutes" in system          # 400 * 1.1 + 30
+    assert "WEEKLY allowance" in system
