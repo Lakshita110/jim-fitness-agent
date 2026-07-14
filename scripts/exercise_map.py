@@ -17,13 +17,14 @@ at what's cached and correct it by hand without waiting for the entry to expire
 
 import sys
 
+from jim.auth import first_user_id
 from jim.db import kv_get, kv_set
 from jim.tools.exercise_match import CACHE_KEY, valid_pairs
 from jim.tools.garmin import _normalize
 
 
-def cmd_list(substring: str = "") -> None:
-    cache: dict = kv_get(CACHE_KEY) or {}
+def cmd_list(user_id: int, substring: str = "") -> None:
+    cache: dict = kv_get(user_id, CACHE_KEY) or {}
     needle = _normalize(substring)
     rows = sorted(k for k in cache if needle in k)
     if not rows:
@@ -35,8 +36,8 @@ def cmd_list(substring: str = "") -> None:
     print(f"\n{len(rows)} of {len(cache)} entries")
 
 
-def cmd_show(name: str) -> None:
-    cache: dict = kv_get(CACHE_KEY) or {}
+def cmd_show(user_id: int, name: str) -> None:
+    cache: dict = kv_get(user_id, CACHE_KEY) or {}
     key = _normalize(name)
     if key not in cache:
         print(f"{name!r} is not cached — it will hit the LLM next time it's pushed")
@@ -44,7 +45,7 @@ def cmd_show(name: str) -> None:
     print(f"{key} -> {tuple(cache[key]) if cache[key] else None}")
 
 
-def cmd_set(name: str, category: str, exercise: str | None) -> None:
+def cmd_set(user_id: int, name: str, category: str, exercise: str | None) -> None:
     allowed = valid_pairs()
     if category not in allowed:
         raise SystemExit(f"{category!r} is not a Garmin category. Known: {sorted(allowed)}")
@@ -53,57 +54,60 @@ def cmd_set(name: str, category: str, exercise: str | None) -> None:
             f"{exercise!r} is not in {category}. Some options: "
             f"{sorted(allowed[category])[:10]}"
         )
-    cache: dict = kv_get(CACHE_KEY) or {}
+    cache: dict = kv_get(user_id, CACHE_KEY) or {}
     key = _normalize(name)
     cache[key] = [category, exercise] if exercise else [category, None]
-    kv_set(CACHE_KEY, cache)
+    kv_set(user_id, CACHE_KEY, cache)
     print(f"{key} -> ({category}, {exercise})")
 
 
-def cmd_set_none(name: str) -> None:
-    cache: dict = kv_get(CACHE_KEY) or {}
+def cmd_set_none(user_id: int, name: str) -> None:
+    cache: dict = kv_get(user_id, CACHE_KEY) or {}
     key = _normalize(name)
     cache[key] = None
-    kv_set(CACHE_KEY, cache)
+    kv_set(user_id, CACHE_KEY, cache)
     print(f"{key} -> None (will describe-only, never re-ask the LLM)")
 
 
-def cmd_forget(name: str) -> None:
-    cache: dict = kv_get(CACHE_KEY) or {}
+def cmd_forget(user_id: int, name: str) -> None:
+    cache: dict = kv_get(user_id, CACHE_KEY) or {}
     key = _normalize(name)
     if cache.pop(key, "missing") == "missing":
         print(f"{name!r} was not cached")
         return
-    kv_set(CACHE_KEY, cache)
+    kv_set(user_id, CACHE_KEY, cache)
     print(f"forgot {key!r} — it will hit the LLM next time it's pushed")
 
 
-def cmd_clear() -> None:
-    kv_set(CACHE_KEY, {})
+def cmd_clear(user_id: int) -> None:
+    kv_set(user_id, CACHE_KEY, {})
     print("cleared the whole exercise_map cache")
 
 
 def main(argv: list[str]) -> None:
     if not argv:
         raise SystemExit(__doc__)
+    user_id = first_user_id()
+    if user_id is None:
+        raise SystemExit("no users in the database — run scripts/backfill_users.py first")
     command, *rest = argv
     if command == "list":
-        cmd_list(*rest)
+        cmd_list(user_id, *rest)
     elif command == "show":
-        cmd_show(*rest)
+        cmd_show(user_id, *rest)
     elif command == "set":
         if len(rest) == 2 and rest[1] == "--none":
-            cmd_set_none(rest[0])
+            cmd_set_none(user_id, rest[0])
         elif len(rest) == 3:
-            cmd_set(rest[0], rest[1], rest[2])
+            cmd_set(user_id, rest[0], rest[1], rest[2])
         elif len(rest) == 2:
-            cmd_set(rest[0], rest[1], None)
+            cmd_set(user_id, rest[0], rest[1], None)
         else:
             raise SystemExit(__doc__)
     elif command == "forget":
-        cmd_forget(*rest)
+        cmd_forget(user_id, *rest)
     elif command == "clear":
-        cmd_clear()
+        cmd_clear(user_id)
     else:
         raise SystemExit(__doc__)
 

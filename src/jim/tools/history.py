@@ -186,7 +186,7 @@ def compute_features(
     )
 
 
-def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
+def query_history(user_id: int, as_of: date, window_days: int = 28) -> HistoryFeatures:
     """DB-backed tool contract (PLAN.md §7). Fetches window rows, delegates to
     the pure functions above."""
     from jim.db import connect
@@ -195,24 +195,24 @@ def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
     with connect() as conn:
         activities = conn.execute(
             "SELECT activity_id, day, type, duration_min FROM garmin_activities"
-            " WHERE day BETWEEN %s AND %s",
-            (start, as_of),
+            " WHERE user_id = %s AND day BETWEEN %s AND %s",
+            (user_id, start, as_of),
         ).fetchall()
         # The muscles a strength session trained live in its sets, not its type.
         sets = conn.execute(
             "SELECT activity_id, exercise_name, category FROM exercise_sets"
-            " WHERE day BETWEEN %s AND %s",
-            (start, as_of),
+            " WHERE user_id = %s AND day BETWEEN %s AND %s",
+            (user_id, start, as_of),
         ).fetchall()
         logs = conn.execute(
             "SELECT day, pain_level, pain_location, pain_notes FROM notion_daily_log"
-            " WHERE day BETWEEN %s AND %s",
-            (start, as_of),
+            " WHERE user_id = %s AND day BETWEEN %s AND %s",
+            (user_id, start, as_of),
         ).fetchall()
         daily = conn.execute(
             "SELECT day, readiness, body_battery FROM garmin_daily"
-            " WHERE day BETWEEN %s AND %s",
-            (start, as_of),
+            " WHERE user_id = %s AND day BETWEEN %s AND %s",
+            (user_id, start, as_of),
         ).fetchall()
 
     by_activity: dict[str, list[str]] = {}
@@ -319,7 +319,7 @@ def compute_readiness(
     )
 
 
-def readiness_read(as_of: date) -> ReadinessRead:
+def readiness_read(user_id: int, as_of: date) -> ReadinessRead:
     """DB-backed load + readiness verdict for the coach and UI badge."""
     from jim.db import connect
 
@@ -327,13 +327,13 @@ def readiness_read(as_of: date) -> ReadinessRead:
     with connect() as conn:
         activities = conn.execute(
             "SELECT day, duration_min, training_load FROM garmin_activities"
-            " WHERE day BETWEEN %s AND %s",
-            (start, as_of),
+            " WHERE user_id = %s AND day BETWEEN %s AND %s",
+            (user_id, start, as_of),
         ).fetchall()
         daily = conn.execute(
             "SELECT day, readiness, body_battery, hrv, sleep_hours FROM garmin_daily"
-            " WHERE day BETWEEN %s AND %s",
-            (start, as_of),
+            " WHERE user_id = %s AND day BETWEEN %s AND %s",
+            (user_id, start, as_of),
         ).fetchall()
     return compute_readiness(as_of, activities, daily)
 
@@ -370,7 +370,7 @@ def summarize_exercise_history(rows: list[dict[str, Any]], max_sessions: int = 5
     return "\n".join(lines) if lines else "(no logged sets found)"
 
 
-def exercise_history(exercise: str, days: int = 180) -> str:
+def exercise_history(user_id: int, exercise: str, days: int = 180) -> str:
     """How the athlete actually performed a movement recently (DB-backed tool).
 
     Fuzzy match: "goblet squat" hits GOBLET_SQUAT via name/category ILIKE."""
@@ -381,14 +381,14 @@ def exercise_history(exercise: str, days: int = 180) -> str:
     with connect() as conn:
         rows = conn.execute(
             "SELECT day, category, exercise_name, reps, weight_kg FROM exercise_sets"
-            " WHERE day >= %s AND (exercise_name ILIKE %s OR category ILIKE %s)"
-            " ORDER BY day DESC",
-            (since, needle, needle),
+            " WHERE user_id = %s AND day >= %s"
+            " AND (exercise_name ILIKE %s OR category ILIKE %s) ORDER BY day DESC",
+            (user_id, since, needle, needle),
         ).fetchall()
     return summarize_exercise_history(rows)
 
 
-def workout_history(days: int = 14) -> str:
+def workout_history(user_id: int, days: int = 14) -> str:
     """Recent workouts + adherence (DB-backed tool for the coach)."""
     from jim.db import connect
 
@@ -396,14 +396,14 @@ def workout_history(days: int = 14) -> str:
     with connect() as conn:
         acts = conn.execute(
             "SELECT day, type, duration_min FROM garmin_activities"
-            " WHERE day >= %s ORDER BY day DESC",
-            (since,),
+            " WHERE user_id = %s AND day >= %s ORDER BY day DESC",
+            (user_id, since),
         ).fetchall()
         outcomes = conn.execute(
             "SELECT s.for_date, s.plan->>'title' AS title, o.adhered, o.notes"
             " FROM suggestions s JOIN outcomes o ON o.suggestion_id = s.id"
-            " WHERE s.for_date >= %s ORDER BY s.for_date DESC",
-            (since,),
+            " WHERE s.user_id = %s AND s.for_date >= %s ORDER BY s.for_date DESC",
+            (user_id, since),
         ).fetchall()
     lines = [
         f"{a['day']}: {a['type']} ({a['duration_min']:.0f} min)" for a in acts

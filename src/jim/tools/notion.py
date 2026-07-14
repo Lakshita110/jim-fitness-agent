@@ -20,10 +20,17 @@ import logging
 from datetime import date
 from typing import Any
 
-from jim.config import settings
 from jim.schemas import NotionDay
 
 log = logging.getLogger(__name__)
+
+
+class NotionNotConnected(RuntimeError):
+    """Raised when a user has no Notion token on file. Notion is optional per
+    user (not everyone shares a knee log), so callers should treat this
+    distinctly from a real API failure — coach.py's fetch_state() and
+    jobs/nightly.py's sync_today() both already catch broad Exception around
+    each source independently, so this is caught there without special-casing."""
 
 # habits db property names
 PROP_DATE = "date"
@@ -37,24 +44,29 @@ PROP_DAY_SCORE = "day score"
 SEVERITY_TO_LEVEL = {"none": 0, "mild": 2, "moderate": 5, "severe": 8}
 SEVERITY_WORDS = frozenset(SEVERITY_TO_LEVEL)
 
-_client: Any = None
+_clients: dict[int, Any] = {}
 _data_source_ids: dict[str, str] = {}
 
 
-def client() -> Any:
-    global _client
-    if _client is None:
+def client(user_id: int) -> Any:
+    if user_id not in _clients:
         from notion_client import Client
 
-        _client = Client(auth=settings().notion_token)
-    return _client
+        from jim.db import get_user_credentials
+
+        creds = get_user_credentials(user_id)
+        token = creds.get("notion_token") if creds else None
+        if not token:
+            raise NotionNotConnected(f"user {user_id} has no Notion token on file")
+        _clients[user_id] = Client(auth=token)
+    return _clients[user_id]
 
 
-def _data_source_id(database_id: str) -> str:
+def _data_source_id(user_id: int, database_id: str) -> str:
     """Notion's API (2025-09+) queries data sources, not databases directly.
     Most databases still have exactly one data source; resolve + cache it."""
     if database_id not in _data_source_ids:
-        db = client().databases.retrieve(database_id=database_id)
+        db = client(user_id).databases.retrieve(database_id=database_id)
         sources = db.get("data_sources") or []
         if not sources:
             raise RuntimeError(f"database {database_id} has no data sources")
@@ -62,8 +74,10 @@ def _data_source_id(database_id: str) -> str:
     return _data_source_ids[database_id]
 
 
-def _query(database_id: str, **kwargs: Any) -> dict[str, Any]:
-    return client().data_sources.query(data_source_id=_data_source_id(database_id), **kwargs)
+def _query(user_id: int, database_id: str, **kwargs: Any) -> dict[str, Any]:
+    return client(user_id).data_sources.query(
+        data_source_id=_data_source_id(user_id, database_id), **kwargs
+    )
 
 
 # --- property extraction helpers -------------------------------------------
@@ -128,11 +142,21 @@ def parse_knee_log_page(page: dict[str, Any], day: date) -> NotionDay:
 # --- tool contracts (PLAN.md §7) -------------------------------------------
 
 
-def get_notion_logs(day: date) -> NotionDay:
+def _knee_log_db_id(user_id: int) -> str:
+    from jim.db import get_user_credentials
+
+    creds = get_user_credentials(user_id)
+    db_id = creds.get("notion_knee_log_db_id") if creds else None
+    if not db_id:
+        raise NotionNotConnected(f"user {user_id} has no notion_knee_log_db_id on file")
+    return db_id
+
+
+def get_notion_logs(user_id: int, day: date) -> NotionDay:
     """Pain level/location, PT adherence, and habits for `day`."""
-    cfg = settings()
     rows = _query(
-        cfg.notion_knee_log_db_id,
+        user_id,
+        _knee_log_db_id(user_id),
         filter={"property": PROP_DATE, "date": {"equals": day.isoformat()}},
         page_size=1,
     ).get("results", [])
@@ -147,11 +171,11 @@ def page_date(page: dict[str, Any]) -> date | None:
     return date.fromisoformat(start[:10])
 
 
-def get_notion_logs_range(start: date, end: date) -> list[NotionDay]:
+def get_notion_logs_range(user_id: int, start: date, end: date) -> list[NotionDay]:
     """Every log page in [start, end], newest first. One paged range query
     rather than a filtered call per day — a 90-day backfill is otherwise 90
     round-trips. Days with no page are simply absent from the list."""
-    cfg = settings()
+    db_id = _knee_log_db_id(user_id)
     days: list[NotionDay] = []
     cursor: str | None = None
     while True:
@@ -167,7 +191,7 @@ def get_notion_logs_range(start: date, end: date) -> list[NotionDay]:
         }
         if cursor:
             kwargs["start_cursor"] = cursor
-        resp = _query(cfg.notion_knee_log_db_id, **kwargs)
+        resp = _query(user_id, db_id, **kwargs)
         for page in resp.get("results", []):
             day = page_date(page)
             if day is not None:

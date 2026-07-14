@@ -63,16 +63,20 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     tavily_api_key: str = ""
 
-    # Shared secret for the built-in web chat (docs/chat.md). Chat is disabled
-    # until this is set; pick a long random string.
-    chat_secret: str = ""
-
     # Vercel sends `Authorization: Bearer $CRON_SECRET` on scheduled invocations.
     # Without it the nightly endpoint is public — anyone could trigger a run.
     cron_secret: str = ""
 
     database_url: str = ""
     app_timezone: str = "America/New_York"
+
+    # 32-byte, base64-encoded AES-GCM key for encrypting credentials at rest
+    # (crypto.py). Generate once, rotate independently of DATABASE_URL.
+    credential_encryption_key: str = ""
+
+    # Signing key for the itsdangerous session cookie (auth.py). Long random
+    # string; every session becomes invalid if this changes.
+    session_secret: str = ""
 
 
 @lru_cache

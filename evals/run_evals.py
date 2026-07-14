@@ -16,6 +16,7 @@ from datetime import date
 
 from jim.agent.loop import RunReport, Toolbox, run_agent
 from jim.config import MAX_TOOL_CALLS
+from jim.playbook import Playbook
 from jim.schemas import (
     ExerciseStep,
     GarminToday,
@@ -105,7 +106,7 @@ def run_scenario(sc: Scenario) -> tuple[RunReport, list[str]]:
         create_garmin_workout=lambda s: None,
         schedule_workout=lambda *a, **kw: None,
     )
-    report = run_agent(TODAY, tools=tools)
+    report = run_agent(1, TODAY, tools=tools, playbook=Playbook())
 
     failures: list[str] = []
     if report.fell_back:

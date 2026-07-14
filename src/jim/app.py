@@ -7,7 +7,9 @@ job is exposed here as /api/cron/nightly for Vercel Cron to ping, and migrations
 are ensured on the request path rather than at startup (see db.ensure_migrated)."""
 
 import hmac
+import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -21,11 +23,13 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from jim import coach
+from jim import auth, coach
 from jim.agent.loop import run_agent
+from jim.auth import User
 from jim.config import settings
+from jim.playbook import Playbook, load_playbook, save_playbook
 
 log = logging.getLogger(__name__)
 
@@ -69,11 +73,19 @@ def health() -> dict[str, str]:
 
 
 @app.post("/run")
-def trigger_run() -> dict:
-    """Manual agent run (plan only — no data sync). See /api/cron/nightly."""
+def trigger_run(request: Request) -> dict:
+    """Manual agent run (plan only — no data sync) for the logged-in user,
+    for local/debug use while developing — the deployed path is
+    /api/cron/nightly, which fans out over every nightly_enabled user.
+
+    Now that real auth exists (Phase 2+), this resolves the caller via
+    _require_user instead of the old first_user_id() placeholder — it was
+    never meant to stay a single fixed user, just single-user *per request*.
+    """
     _ready()
+    user = _require_user(request)
     today = datetime.now(ZoneInfo(settings().app_timezone)).date()
-    report = run_agent(today)
+    report = run_agent(user.id, today)
     return {
         "for_date": report.for_date.isoformat(),
         "suggestion_id": report.suggestion_id,
@@ -100,112 +112,291 @@ def cron_nightly(request: Request) -> dict:
     from jim.jobs.nightly import run_nightly
 
     result = run_nightly()
-    log.info("cron nightly finished in %ss", result.get("elapsed_sec"))
+    log.info(
+        "cron nightly finished in %ss over %d user(s)",
+        result.get("elapsed_sec"), len(result.get("users", {})),
+    )
     return result
 
 
 # --- Jim's chat ---------------------------------------------------------------
 #
-# Auth is one shared key, presented either way:
-#   1. ?key=<CHAT_SECRET> — the sign-in. Visiting /chat with it sets a cookie and
-#      redirects to a clean /chat.
-#   2. the session cookie — everything after that.
-#
-# The cookie is why the key doesn't have to live in the URL: out of browser
-# history, out of the PWA manifest, and out of any screenshot of the address bar.
-# It holds a token DERIVED from the secret, not the secret itself, so reading the
-# cookie jar doesn't hand over the shareable key.
-
-SESSION_COOKIE = "jim_session"
-SESSION_MAX_AGE = 400 * 24 * 3600  # ~13 months (Chrome caps cookie life at 400d)
+# Auth is cookie-only: a signed, expiring session token (auth.py) set by
+# /auth/login or /auth/signup. There is no more ?key= URL parameter — a request
+# with no valid cookie is unauthenticated, full stop.
 
 
-def _session_token() -> str:
-    secret = settings().chat_secret
-    return hmac.new(secret.encode(), b"jim-session-v1", "sha256").hexdigest()
+def _current_user(request: Request) -> User | None:
+    token = request.cookies.get(auth.SESSION_COOKIE_NAME, "")
+    if not token:
+        return None
+    user_id = auth.verify_session_token(token)
+    if user_id is None:
+        return None
+    _ready()
+    return auth.get_user_by_id(user_id)
 
 
-def _authed(request: Request, key: str = "") -> bool:
-    """Valid key in the request, or a valid session cookie."""
-    secret = settings().chat_secret
-    if not secret:  # chat stays disabled until a secret is configured
-        return False
-    if key and hmac.compare_digest(key, secret):
-        return True
-    cookie = request.cookies.get(SESSION_COOKIE, "")
-    return bool(cookie) and hmac.compare_digest(cookie, _session_token())
+def _require_user(request: Request) -> User:
+    user = _current_user(request)
+    if user is None:
+        raise HTTPException(status_code=403, detail="not authenticated")
+    return user
 
 
-def _require_auth(request: Request, key: str = "") -> None:
-    if not _authed(request, key):
-        raise HTTPException(status_code=403, detail="bad or missing chat key")
-
-
-def _set_session(response: Response, secure: bool) -> None:
+def _set_session_cookie(response: Response, user_id: int, secure: bool) -> None:
     response.set_cookie(
-        SESSION_COOKIE,
-        _session_token(),
-        max_age=SESSION_MAX_AGE,
+        auth.SESSION_COOKIE_NAME,
+        auth.create_session_token(user_id),
+        max_age=auth.SESSION_MAX_AGE,
         httponly=True,   # JS can't read it, so an XSS can't exfiltrate the session
         secure=secure,   # https only in prod; must be off on plain-http localhost
         samesite="lax",
     )
 
 
+class SignupBody(BaseModel):
+    email: str
+    password: str
+
+
+class LoginBody(BaseModel):
+    email: str
+    password: str
+
+
 class KeyOnly(BaseModel):
-    key: str = ""
+    pass
 
 
 class ChatMessage(BaseModel):
-    key: str = ""
     text: str
     scope_date: str | None = None  # ISO date: edit only this day
 
 
 class PushDay(BaseModel):
-    key: str = ""
     date: str  # ISO date of the draft day to push/update
+
+
+@app.post("/auth/signup")
+def auth_signup(body: SignupBody, request: Request, response: Response) -> dict:
+    _ready()
+    try:
+        user = auth.create_user(body.email, body.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    _set_session_cookie(response, user.id, secure=request.url.scheme == "https")
+    return {"ok": True}
+
+
+@app.post("/auth/login")
+def auth_login(body: LoginBody, request: Request, response: Response) -> dict:
+    _ready()
+    user = auth.authenticate(body.email, body.password)
+    if user is None:
+        # Generic on purpose: same message whether the email doesn't exist or
+        # the password is wrong, so the response can't be used to enumerate
+        # accounts.
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    _set_session_cookie(response, user.id, secure=request.url.scheme == "https")
+    return {"ok": True}
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response) -> dict:
+    response.delete_cookie(auth.SESSION_COOKIE_NAME)
+    return {"ok": True}
 
 
 @app.post("/chat/message")
 def chat_message(msg: ChatMessage, request: Request) -> dict:
-    _require_auth(request, msg.key)
+    user = _require_user(request)
     if not msg.text.strip():
         raise HTTPException(status_code=400, detail="empty message")
     _ready()
-    return coach.converse(msg.text.strip(), scope_date=msg.scope_date)
+    return coach.converse(msg.text.strip(), user.id, scope_date=msg.scope_date)
 
 
 @app.post("/chat/approve")
 def chat_approve(body: KeyOnly, request: Request) -> dict:
-    _require_auth(request, body.key)
+    user = _require_user(request)
     _ready()
-    summary = coach.approve()
-    state = coach.current_state()
+    summary = coach.approve(user.id)
+    state = coach.current_state(user.id)
     return {"summary": summary, "draft": state["draft"],
             "push_status": state["push_status"]}
 
 
 @app.post("/chat/push-day")
 def chat_push_day(body: PushDay, request: Request) -> dict:
-    _require_auth(request, body.key)
+    user = _require_user(request)
     _ready()
-    return coach.push_day(body.date)
+    return coach.push_day(body.date, user.id)
 
 
 @app.post("/chat/clear")
 def chat_clear(body: KeyOnly, request: Request) -> dict:
-    _require_auth(request, body.key)
+    user = _require_user(request)
     _ready()
-    coach.clear()
+    coach.clear(user.id)
     return {"ok": True}
 
 
 @app.get("/chat/state")
-def chat_state(request: Request, key: str = "") -> dict:
-    _require_auth(request, key)
+def chat_state(request: Request) -> dict:
+    user = _require_user(request)
     _ready()
-    return coach.current_state()
+    return coach.current_state(user.id)
+
+
+# --- Playbook editor API (soft-baking-kettle plan Phase 4) --------------------
+# Validated-JSON-textarea MVP (decided in the plan over a structured form).
+# All-or-nothing validation: a partially-applied playbook edit is worse than a
+# rejected one with a clear error, so a bad submission never touches storage.
+
+
+class PlaybookBody(BaseModel):
+    raw: str
+
+
+@app.get("/api/playbook")
+def get_playbook(request: Request) -> Response:
+    user = _require_user(request)
+    _ready()
+    pb = load_playbook(user.id)
+    return Response(
+        json.dumps(pb.model_dump(mode="json"), indent=2),
+        media_type="application/json",
+    )
+
+
+@app.post("/api/playbook")
+def post_playbook(body: PlaybookBody, request: Request) -> dict:
+    user = _require_user(request)
+    _ready()
+    try:
+        parsed = json.loads(body.raw)
+        pb = Playbook.model_validate(parsed)
+    except (json.JSONDecodeError, ValidationError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    save_playbook(user.id, pb)
+    return {"ok": True}
+
+
+# --- Garmin web onboarding (soft-baking-kettle plan Phase 4) ------------------
+#
+# The installed garminconnect (>=0.2.19, verified by reading the installed
+# package's client.py) offers a clean two-step resumable MFA flow:
+# Garmin(email, password, return_on_mfa=True).login() returns ("needs_mfa", None)
+# instead of blocking on stdin, and a later g.resume_login(client_state, mfa_code)
+# completes it against the SAME in-memory client object (resume_login's
+# client_state argument is accepted but unused internally — MFA state lives on
+# the Garmin/Client instance itself). So the in-progress client has to be held
+# server-side between the two requests; it is NEVER persisted to the DB, only
+# kept in this process-local dict with a short TTL.
+
+_pending_garmin_logins: dict[int, dict] = {}
+_GARMIN_MFA_TTL_SEC = 300  # long enough to fetch a code from the Garmin Connect app
+
+
+class GarminConnectBody(BaseModel):
+    garmin_email: str
+    garmin_password: str
+
+
+class GarminMfaBody(BaseModel):
+    mfa_code: str
+
+
+def _save_garmin_login(user_id: int, email: str, password: str, g: object) -> None:
+    from jim import db
+
+    blob = g.client.dumps()  # same mechanism scripts/garmin_login.py --export uses
+    db.save_user_credentials(
+        user_id, garmin_email=email, garmin_password=password, garmin_tokens=blob
+    )
+
+
+@app.get("/settings/garmin")
+def garmin_settings_page(request: Request) -> Response:
+    if _current_user(request) is None:
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse(GARMIN_PAGE)
+
+
+@app.get("/api/garmin/status")
+def garmin_status(request: Request) -> dict:
+    """Whether this user already has a working Garmin connection, so the
+    settings page can show 'Connected as X' instead of always presenting a
+    blank login form — landing here after connecting looked exactly like the
+    connection never took, even though it had."""
+    from jim import db
+
+    user = _require_user(request)
+    creds = db.get_user_credentials(user.id)
+    connected = bool(creds and (creds.get("garmin_tokens") or creds.get("garmin_password")))
+    return {"connected": connected, "garmin_email": creds.get("garmin_email") if creds else None}
+
+
+@app.post("/settings/garmin/connect")
+def garmin_connect(body: GarminConnectBody, request: Request) -> dict:
+    user = _require_user(request)
+    _ready()
+    from garminconnect import (
+        Garmin,
+        GarminConnectAuthenticationError,
+        GarminConnectConnectionError,
+        GarminConnectTooManyRequestsError,
+    )
+
+    g = Garmin(body.garmin_email, body.garmin_password, return_on_mfa=True)
+    try:
+        mfa_status, _legacy_token = g.login()
+    except GarminConnectAuthenticationError as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Garmin login failed — check your email and password.",
+        ) from e
+    except (GarminConnectTooManyRequestsError, GarminConnectConnectionError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if mfa_status == "needs_mfa":
+        _pending_garmin_logins[user.id] = {
+            "client": g,
+            "email": body.garmin_email,
+            "password": body.garmin_password,
+            "ts": time.time(),
+        }
+        return {"mfa_required": True}
+
+    _save_garmin_login(user.id, body.garmin_email, body.garmin_password, g)
+    return {"ok": True}
+
+
+@app.post("/settings/garmin/mfa")
+def garmin_mfa(body: GarminMfaBody, request: Request) -> dict:
+    user = _require_user(request)
+    _ready()
+    pending = _pending_garmin_logins.get(user.id)
+    if pending is None or time.time() - pending["ts"] > _GARMIN_MFA_TTL_SEC:
+        _pending_garmin_logins.pop(user.id, None)
+        raise HTTPException(
+            status_code=400,
+            detail="No pending Garmin login (or it expired) — start again.",
+        )
+    g = pending["client"]
+    try:
+        g.resume_login({}, body.mfa_code)
+    except Exception as e:  # resume_login doesn't guarantee a typed auth error
+        # Wrong code — leave the pending login in place so the user can retry
+        # without re-entering email/password.
+        raise HTTPException(
+            status_code=400, detail="Invalid MFA code — try again."
+        ) from e
+
+    _pending_garmin_logins.pop(user.id, None)
+    _save_garmin_login(user.id, pending["email"], pending["password"], g)
+    return {"ok": True}
 
 
 # --- home-screen install (DEPLOY.md) -----------------------------------------
@@ -291,6 +482,35 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .brand-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 #clear { color: var(--muted); font-size: 12px; text-decoration: none; flex-shrink: 0; }
 #clear:hover { color: var(--ink); }
+.hdr-link { color: var(--muted); font-size: 12px; text-decoration: none; flex-shrink: 0; margin-left: 14px; }
+.hdr-link:hover { color: var(--ink); }
+
+/* --- playbook panel --------------------------------------------------------- */
+.pb-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
+              z-index: 50; align-items: center; justify-content: center; padding: 20px; }
+.pb-overlay.open { display: flex; }
+.pb-panel { width: 100%; max-width: 640px; max-height: 84vh; display: flex; flex-direction: column;
+            background: var(--solid); border: 1px solid var(--line); border-radius: 18px;
+            padding: 20px 22px; }
+.pb-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.pb-title { font-family: 'Fraunces', Georgia, serif; font-style: italic; font-weight: 500;
+            font-size: 19px; color: var(--ink); }
+.pb-close { color: var(--muted); background: none; border: none; font-size: 20px; cursor: pointer;
+            font-family: inherit; line-height: 1; }
+.pb-close:hover { color: var(--ink); }
+#pbText { flex: 1; min-height: 320px; resize: vertical; background: rgba(255,255,255,.04);
+          border: 1px solid var(--glass-line); border-radius: 12px; color: var(--ink);
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+          line-height: 1.5; padding: 12px; outline: none; }
+#pbText:focus { border-color: rgba(180,206,158,.5); }
+.pb-foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.pb-save { padding: 10px 20px; border: none; border-radius: 999px;
+           background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
+           font-weight: 600; font-size: 13px; font-family: inherit; cursor: pointer; }
+.pb-save:active { transform: scale(.98); }
+.pb-msg { font-size: 12.5px; color: var(--muted); }
+.pb-msg.err { color: var(--warn); }
+.pb-msg.ok { color: var(--sage); }
 
 .main { flex: 1; display: flex; min-height: 0; position: relative; }
 .chat-col { flex: 1 1 58%; min-width: 0; display: flex; flex-direction: column;
@@ -371,10 +591,6 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
             background: var(--glass); border: 1px solid var(--glass-line);
             border-radius: 999px; backdrop-filter: blur(14px); }
 .composer:focus-within { border-color: rgba(180,206,158,.5); }
-#plus { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--glass-line);
-        background: transparent; color: var(--muted); font-size: 18px; line-height: 1;
-        cursor: pointer; flex-shrink: 0; }
-#plus:hover { color: var(--ink); }
 #t { flex: 1; min-width: 0; border: none; outline: none; background: transparent;
      font-size: 15px; font-family: inherit; font-weight: 450; color: var(--ink); padding: 8px 4px; }
 #t::placeholder { color: var(--muted); }
@@ -435,9 +651,6 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
 .r-badge.on  { color: var(--sage); background: rgba(180,206,158,.12); border: 1px solid rgba(180,206,158,.3); }
 .r-badge.mod { color: var(--data); background: rgba(231,181,124,.12); border: 1px solid rgba(231,181,124,.3); }
 /* inline edit affordance on a day row */
-.r-edit { flex-shrink: 0; border: none; background: transparent; color: var(--muted);
-          font-size: 13px; cursor: pointer; padding: 2px 4px; line-height: 1; }
-.r-edit:hover { color: var(--sage); }
 /* action bar inside an expanded day */
 .d-actions { display: flex; gap: 8px; margin-top: 10px; }
 .d-btn { flex: 1; padding: 8px; border-radius: 10px; font-family: inherit; font-size: 12px;
@@ -487,8 +700,23 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
     <div class="brand-name">Jim</div>
     <div class="brand-sub">Your training partner in crime</div>
   </div>
+  <a href="#" id="playbookLink" class="hdr-link">Playbook</a>
+  <a href="/settings/garmin" class="hdr-link">Garmin</a>
   <a href="#" id="clear">Clear</a>
 </header>
+<div class="pb-overlay" id="pbOverlay">
+  <div class="pb-panel">
+    <div class="pb-head">
+      <div class="pb-title">Playbook</div>
+      <button type="button" class="pb-close" id="pbClose" aria-label="Close">&times;</button>
+    </div>
+    <textarea id="pbText" spellcheck="false"></textarea>
+    <div class="pb-foot">
+      <button type="button" class="pb-save" id="pbSave">Save</button>
+      <span class="pb-msg" id="pbMsg"></span>
+    </div>
+  </div>
+</div>
 <div class="main">
   <div class="chat-col">
     <div id="cards">
@@ -512,7 +740,6 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
     <form id="f">
       <div class="scope-bar" id="scopeBar" hidden></div>
       <div class="composer">
-        <button type="button" id="plus" aria-label="Compose">+</button>
         <input id="t" placeholder="Ask me anything…" autocomplete="off">
         <button id="send" type="submit" aria-label="Send">➤</button>
       </div>
@@ -743,7 +970,6 @@ function renderPlan(draft, opts) {
     row.innerHTML =
       `<div class="row-top"><span class="r-type">${typeLabel}</span>` +
       `<span class="r-title">${esc(title)}</span><span class="r-dur">${dur}</span>` +
-      `<button type="button" class="r-edit" data-iso="${day.iso}" title="${isRest ? "Add a workout" : "Edit this day"}">✎</button>` +
       (clickable ? `<span class="r-chev">&rsaquo;</span>` : "") + `</div>` +
       `<div class="row-sub"><span class="r-date">${day.label}</span>` + badge +
       (steps ? `<span class="r-steps">${steps}</span>` : "") + `</div>` +
@@ -751,9 +977,6 @@ function renderPlan(draft, opts) {
     if (clickable) row.addEventListener("click", () => {
       const nowOpen = row.classList.toggle("open");
       if (nowOpen) openDays.add(day.iso); else openDays.delete(day.iso);
-    });
-    row.querySelector(".r-edit")?.addEventListener("click", (e) => {
-      e.stopPropagation(); setScope(day.iso, day.label);
     });
     row.querySelector(".d-btn.edit")?.addEventListener("click", (e) => {
       e.stopPropagation(); setScope(day.iso, day.label);
@@ -844,7 +1067,6 @@ document.getElementById("f").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = t.value.trim(); if (text) send(text);
 });
-document.getElementById("plus").addEventListener("click", () => t.focus());
 pushBtn.addEventListener("click", async () => {
   pushBtn.disabled = true; pushBtn.classList.add("syncing"); pushBtn.textContent = "Syncing…";
   try {
@@ -874,18 +1096,347 @@ peek.addEventListener("touchmove", e => {
 }, { passive: true });
 peek.addEventListener("touchend", () => { dragStartY = null; });
 peek.addEventListener("click", () => { if (!dragMoved) setExpanded(!planCol.classList.contains("expanded")); dragMoved = false; });
+
+/* --- playbook panel --- */
+const pbOverlay = document.getElementById("pbOverlay"), pbText = document.getElementById("pbText");
+const pbMsg = document.getElementById("pbMsg"), pbSave = document.getElementById("pbSave");
+function pbSetMsg(text, cls) { pbMsg.textContent = text || ""; pbMsg.className = "pb-msg" + (cls ? " " + cls : ""); }
+async function openPlaybook() {
+  pbOverlay.classList.add("open"); pbSetMsg("Loading…");
+  try {
+    const r = await fetch("/api/playbook");
+    const text = await r.text();
+    if (!r.ok) { pbSetMsg("Couldn't load playbook", "err"); return; }
+    pbText.value = text; pbSetMsg("");
+  } catch { pbSetMsg("network error", "err"); }
+}
+document.getElementById("playbookLink").addEventListener("click", (e) => { e.preventDefault(); openPlaybook(); });
+document.getElementById("pbClose").addEventListener("click", () => pbOverlay.classList.remove("open"));
+pbOverlay.addEventListener("click", (e) => { if (e.target === pbOverlay) pbOverlay.classList.remove("open"); });
+pbSave.addEventListener("click", async () => {
+  pbSetMsg("Saving…");
+  try {
+    const r = await fetch("/api/playbook", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ raw: pbText.value }) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { pbSetMsg(data.error || data.detail || "save failed", "err"); return; }
+    pbSetMsg("Saved", "ok");
+  } catch { pbSetMsg("network error", "err"); }
+});
+
 load();
 </script></body></html>"""
 
 
+LOGIN_PAGE = """<!doctype html><html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F100D">
+<title>Jim</title>
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#0F100D; --glass:rgba(255,255,255,.045); --glass-line:rgba(255,255,255,.09);
+  --solid:#171812; --line:rgba(255,255,255,.08);
+  --ink:#F2EFE7; --muted:#9A9C90;
+  --sage:#B4CE9E; --sage-dim:#8FAE78; --data:#E7B57C; --warn:#D98C7A;
+}
+* { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
+body { font-family: 'Inter', -apple-system, system-ui, sans-serif;
+       background:
+         radial-gradient(900px 460px at 10% -8%, rgba(180,206,158,.12) 0%, transparent 58%),
+         radial-gradient(800px 420px at 105% 0%, rgba(231,181,124,.10) 0%, transparent 55%),
+         linear-gradient(180deg, #14150F 0%, var(--bg) 45%);
+       color: var(--ink); min-height: 100dvh; display: flex; align-items: center;
+       justify-content: center; -webkit-font-smoothing: antialiased; padding: 20px; }
+.card { width: 100%; max-width: 360px; background: var(--glass); border: 1px solid var(--glass-line);
+        border-radius: 20px; padding: 28px 26px; backdrop-filter: blur(14px); }
+.brand-name { font-family: 'Fraunces', Georgia, serif; font-style: italic; font-weight: 500;
+              font-size: 28px; letter-spacing: -.01em; }
+.brand-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; margin-bottom: 24px; }
+form { display: flex; flex-direction: column; gap: 12px; }
+form.hidden { display: none; }
+label { font-size: 11.5px; color: var(--muted); letter-spacing: .03em; }
+input { width: 100%; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--glass-line);
+        background: rgba(255,255,255,.04); color: var(--ink); font-family: inherit; font-size: 14.5px;
+        outline: none; margin-top: 4px; }
+input:focus { border-color: rgba(180,206,158,.5); }
+button.submit { margin-top: 6px; padding: 12px; border: none; border-radius: 999px;
+        background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
+        font-weight: 600; font-size: 14px; font-family: inherit; cursor: pointer; }
+button.submit:active { transform: scale(.98); }
+button.submit:disabled { opacity: .5; cursor: default; }
+.switch { text-align: center; font-size: 12.5px; color: var(--muted); margin-top: 18px; }
+.switch a { color: var(--sage); text-decoration: none; cursor: pointer; }
+.switch a:hover { text-decoration: underline; }
+.err { font-size: 12.5px; color: var(--warn); min-height: 16px; margin-top: 2px; }
+</style></head><body>
+<div class="card">
+  <div class="brand-name">Jim</div>
+  <div class="brand-sub" id="sub">Sign in to your training partner</div>
+
+  <form id="loginForm">
+    <div>
+      <label>Email</label>
+      <input id="liEmail" type="email" autocomplete="username" required>
+    </div>
+    <div>
+      <label>Password</label>
+      <input id="liPassword" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="err" id="liErr"></div>
+    <button class="submit" type="submit">Sign in</button>
+  </form>
+
+  <form id="signupForm" class="hidden">
+    <div>
+      <label>Email</label>
+      <input id="suEmail" type="email" autocomplete="username" required>
+    </div>
+    <div>
+      <label>Password</label>
+      <input id="suPassword" type="password" autocomplete="new-password" required>
+    </div>
+    <div>
+      <label>Confirm password</label>
+      <input id="suPassword2" type="password" autocomplete="new-password" required>
+    </div>
+    <div class="err" id="suErr"></div>
+    <button class="submit" type="submit">Create account</button>
+  </form>
+
+  <div class="switch" id="switchLogin">New here? <a id="toSignup">Create an account</a></div>
+  <div class="switch hidden" id="switchSignup">Have an account? <a id="toLogin">Sign in</a></div>
+</div>
+<script>
+const loginForm = document.getElementById("loginForm"), signupForm = document.getElementById("signupForm");
+const switchLogin = document.getElementById("switchLogin"), switchSignup = document.getElementById("switchSignup");
+const sub = document.getElementById("sub");
+
+document.getElementById("toSignup").onclick = () => {
+  loginForm.classList.add("hidden"); switchLogin.classList.add("hidden");
+  signupForm.classList.remove("hidden"); switchSignup.classList.remove("hidden");
+  sub.textContent = "Create your account";
+};
+document.getElementById("toLogin").onclick = () => {
+  signupForm.classList.add("hidden"); switchSignup.classList.add("hidden");
+  loginForm.classList.remove("hidden"); switchLogin.classList.remove("hidden");
+  sub.textContent = "Sign in to your training partner";
+};
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "something went wrong");
+  return data;
+}
+
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById("liErr"); errEl.textContent = "";
+  try {
+    await post("/auth/login", {
+      email: document.getElementById("liEmail").value.trim(),
+      password: document.getElementById("liPassword").value,
+    });
+    location.href = "/chat";
+  } catch (err) { errEl.textContent = err.message; }
+});
+
+signupForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById("suErr"); errEl.textContent = "";
+  const pw = document.getElementById("suPassword").value;
+  const pw2 = document.getElementById("suPassword2").value;
+  if (pw !== pw2) { errEl.textContent = "passwords don't match"; return; }
+  try {
+    await post("/auth/signup", {
+      email: document.getElementById("suEmail").value.trim(),
+      password: pw,
+    });
+    location.href = "/chat";
+  } catch (err) { errEl.textContent = err.message; }
+});
+</script></body></html>"""
+
+
+GARMIN_PAGE = """<!doctype html><html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F100D">
+<title>Jim — Connect Garmin</title>
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#0F100D; --glass:rgba(255,255,255,.045); --glass-line:rgba(255,255,255,.09);
+  --solid:#171812; --line:rgba(255,255,255,.08);
+  --ink:#F2EFE7; --muted:#9A9C90;
+  --sage:#B4CE9E; --sage-dim:#8FAE78; --data:#E7B57C; --warn:#D98C7A;
+}
+* { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
+body { font-family: 'Inter', -apple-system, system-ui, sans-serif;
+       background:
+         radial-gradient(900px 460px at 10% -8%, rgba(180,206,158,.12) 0%, transparent 58%),
+         radial-gradient(800px 420px at 105% 0%, rgba(231,181,124,.10) 0%, transparent 55%),
+         linear-gradient(180deg, #14150F 0%, var(--bg) 45%);
+       color: var(--ink); min-height: 100dvh; display: flex; align-items: center;
+       justify-content: center; -webkit-font-smoothing: antialiased; padding: 20px; }
+.card { width: 100%; max-width: 380px; background: var(--glass); border: 1px solid var(--glass-line);
+        border-radius: 20px; padding: 28px 26px; backdrop-filter: blur(14px); }
+.brand-name { font-family: 'Fraunces', Georgia, serif; font-style: italic; font-weight: 500;
+              font-size: 28px; letter-spacing: -.01em; }
+.brand-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; margin-bottom: 16px; }
+.trust-note { font-size: 12px; line-height: 1.5; color: var(--muted); background: rgba(217,140,122,.08);
+              border: 1px solid rgba(217,140,122,.25); border-radius: 12px; padding: 11px 13px;
+              margin-bottom: 20px; }
+form { display: flex; flex-direction: column; gap: 12px; }
+form.hidden { display: none; }
+label { font-size: 11.5px; color: var(--muted); letter-spacing: .03em; }
+input { width: 100%; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--glass-line);
+        background: rgba(255,255,255,.04); color: var(--ink); font-family: inherit; font-size: 14.5px;
+        outline: none; margin-top: 4px; }
+input:focus { border-color: rgba(180,206,158,.5); }
+button.submit { margin-top: 6px; padding: 12px; border: none; border-radius: 999px;
+        background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
+        font-weight: 600; font-size: 14px; font-family: inherit; cursor: pointer; }
+button.submit:active { transform: scale(.98); }
+button.submit:disabled { opacity: .5; cursor: default; }
+.err { font-size: 12.5px; color: var(--warn); min-height: 16px; margin-top: 2px; }
+.ok { font-size: 12.5px; color: var(--sage); min-height: 16px; margin-top: 2px; }
+.back { display: block; text-align: center; font-size: 12.5px; color: var(--muted);
+        text-decoration: none; margin-top: 18px; }
+.back:hover { color: var(--ink); }
+.connected { display: none; }
+.connected.show { display: block; }
+.connected-row { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--ink); }
+.connected-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sage); flex-shrink: 0; }
+.connected-email { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.reconnect { margin-top: 16px; background: none; border: 1px solid var(--glass-line);
+             border-radius: 999px; padding: 9px 16px; color: var(--muted); font-family: inherit;
+             font-size: 12.5px; cursor: pointer; }
+.reconnect:hover { color: var(--ink); border-color: var(--sage); }
+</style></head><body>
+<div class="card">
+  <div class="brand-name">Connect Garmin</div>
+  <div class="brand-sub">So Jim can read your recovery data and schedule workouts to your watch</div>
+
+  <div class="connected" id="connectedState">
+    <div class="connected-row"><span class="connected-dot"></span>Connected</div>
+    <div class="connected-email" id="connectedEmail"></div>
+    <button class="reconnect" type="button" id="reconnectBtn">Reconnect with different credentials</button>
+  </div>
+
+  <div class="trust-note" id="trustNote">We store your Garmin password, encrypted, because Garmin doesn't support
+    connecting accounts without one.</div>
+
+  <form id="connectForm">
+    <div>
+      <label>Garmin email</label>
+      <input id="gEmail" type="email" autocomplete="username" required>
+    </div>
+    <div>
+      <label>Garmin password</label>
+      <input id="gPassword" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="err" id="connectErr"></div>
+    <button class="submit" type="submit">Connect</button>
+  </form>
+
+  <form id="mfaForm" class="hidden">
+    <div>
+      <label>Verification code</label>
+      <input id="gMfa" type="text" inputmode="numeric" autocomplete="one-time-code" required>
+    </div>
+    <div class="err" id="mfaErr"></div>
+    <button class="submit" type="submit">Verify</button>
+  </form>
+
+  <a class="back" href="/chat">&larr; Back to chat</a>
+</div>
+<script>
+const connectForm = document.getElementById("connectForm"), mfaForm = document.getElementById("mfaForm");
+const connectErr = document.getElementById("connectErr"), mfaErr = document.getElementById("mfaErr");
+const connectedState = document.getElementById("connectedState"), trustNote = document.getElementById("trustNote");
+const connectedEmail = document.getElementById("connectedEmail"), reconnectBtn = document.getElementById("reconnectBtn");
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "something went wrong");
+  return data;
+}
+
+function showConnectForm() {
+  connectedState.classList.remove("show");
+  trustNote.style.display = ""; connectForm.classList.remove("hidden");
+}
+
+function showConnectedState(email) {
+  connectedEmail.textContent = email || "";
+  connectedState.classList.add("show");
+  trustNote.style.display = "none"; connectForm.classList.add("hidden");
+}
+
+// Landing here after a successful connect looked identical to never having
+// connected at all — the form was always blank. Check status on load instead.
+fetch("/api/garmin/status").then(r => r.json()).then(s => {
+  if (s.connected) showConnectedState(s.garmin_email); else showConnectForm();
+}).catch(() => showConnectForm());
+
+reconnectBtn.addEventListener("click", () => {
+  document.getElementById("gEmail").value = ""; document.getElementById("gPassword").value = "";
+  showConnectForm();
+});
+
+connectForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  connectErr.textContent = "";
+  try {
+    const data = await post("/settings/garmin/connect", {
+      garmin_email: document.getElementById("gEmail").value.trim(),
+      garmin_password: document.getElementById("gPassword").value,
+    });
+    if (data.mfa_required) {
+      connectForm.classList.add("hidden");
+      mfaForm.classList.remove("hidden");
+    } else {
+      showConnectedState(document.getElementById("gEmail").value.trim());
+    }
+  } catch (err) { connectErr.textContent = err.message; }
+});
+
+mfaForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  mfaErr.textContent = "";
+  try {
+    await post("/settings/garmin/mfa", { mfa_code: document.getElementById("gMfa").value.trim() });
+    mfaForm.classList.add("hidden");
+    showConnectedState(document.getElementById("gEmail").value.trim());
+  } catch (err) { mfaErr.textContent = err.message; }
+});
+</script></body></html>"""
+
+
 @app.get("/chat")
-def chat_page(request: Request, key: str = "") -> Response:
-    """Signing in with ?key= sets the session cookie and bounces to a clean /chat,
-    so the secret is never left sitting in the address bar or browser history.
-    After that the cookie carries it and the URL is just /chat."""
-    _require_auth(request, key)
-    if key:
-        redirect = RedirectResponse("/chat", status_code=303)
-        _set_session(redirect, secure=request.url.scheme == "https")
-        return redirect
+def chat_page(request: Request) -> Response:
+    """Cookie-only now — no ?key= sign-in. An unauthenticated visit bounces to
+    /login instead of erroring, since this is the URL people bookmark/add to
+    their home screen."""
+    if _current_user(request) is None:
+        return RedirectResponse("/login", status_code=303)
     return HTMLResponse(CHAT_PAGE)
+
+
+@app.get("/login")
+def login_page() -> Response:
+    return HTMLResponse(LOGIN_PAGE)

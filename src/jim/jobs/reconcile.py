@@ -36,24 +36,26 @@ def adhered(plan: StructuredSession, actuals: list[ActivitySummary]) -> tuple[bo
     return True, f"matched {len(matches)} activity(ies), {total:.0f} min"
 
 
-def reconcile_day(day: date) -> None:
+def reconcile_day(user_id: int, day: date) -> None:
     """Match `day`'s Garmin actuals against its stored suggestion → outcomes.
     The nightly job calls this for *today* (the session is done by 21:00)."""
     from jim.tools.garmin import get_garmin_today
 
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, plan FROM suggestions WHERE for_date = %s ORDER BY run_ts DESC LIMIT 1",
-            (day,),
+            "SELECT id, plan FROM suggestions WHERE user_id = %s AND for_date = %s"
+            " ORDER BY run_ts DESC LIMIT 1",
+            (user_id, day),
         ).fetchone()
     if row is None:
         log.info("no suggestion stored for %s; nothing to reconcile", day)
         return
 
     plan = StructuredSession.model_validate(row["plan"])
-    actuals = get_garmin_today(day).activities
+    actuals = get_garmin_today(user_id, day).activities
     ok, notes = adhered(plan, actuals)
     record_outcome(
+        user_id=user_id,
         suggestion_id=row["id"],
         actual_activity_id=actuals[0].activity_id if actuals else None,
         adhered=ok,

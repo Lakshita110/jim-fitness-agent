@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from jim.agent.loop import Toolbox, ToolBudgetExceeded, run_agent
+from jim.playbook import Playbook
 from jim.schemas import (
     ExerciseStep,
     GarminToday,
@@ -17,6 +18,16 @@ from jim.schemas import (
 
 TODAY = date(2026, 7, 6)
 TOMORROW = TODAY + timedelta(days=1)
+
+
+@pytest.fixture(autouse=True)
+def _no_db_playbook_fallback(monkeypatch):
+    """run_agent's playbook fallback is Postgres-backed (load_playbook(user_id))
+    now, unlike the old disk-based default. None of these tests inject a real
+    playbook, and none of them need real template content — use_existing_workout
+    short-circuits before touching it in every AUTO_PUSH scenario exercised
+    here — so stub it to an empty Playbook rather than hit a live DB."""
+    monkeypatch.setattr("jim.playbook.load_playbook", lambda user_id: Playbook())
 
 
 def sane_session(for_date, **overrides) -> StructuredSession:
@@ -89,7 +100,7 @@ class Recorder:
 
 def test_routine_night_skips_research_and_saves_draft():
     rec = Recorder()
-    report = run_agent(TODAY, tools=rec.toolbox())
+    report = run_agent(1, TODAY, tools=rec.toolbox())
     assert "research" not in rec.calls
     assert rec.calls == [
         "chat_planned", "garmin", "notion", "history", "goals",
@@ -106,7 +117,7 @@ def test_routine_night_skips_research_and_saves_draft():
 
 def test_chat_planned_date_makes_nightly_step_aside():
     rec = Recorder(chat_planned=True)
-    report = run_agent(TODAY, tools=rec.toolbox())
+    report = run_agent(1, TODAY, tools=rec.toolbox())
     assert report.skipped
     assert report.session is None
     assert rec.calls == ["chat_planned"]  # nothing else ran — no LLM cost
@@ -122,13 +133,13 @@ def test_goals_reach_compose():
     rec = Recorder(goals="run a 5k by spring, knee first")
     tb = rec.toolbox()
     tb.compose_session = compose
-    run_agent(TODAY, tools=tb)
+    run_agent(1, TODAY, tools=tb)
     assert seen["goals"] == "run a 5k by spring, knee first"
 
 
 def test_pain_spike_triggers_exactly_one_research_call():
     rec = Recorder(notion=NotionDay(day=TODAY, pain_level=6, pt_done=True))
-    report = run_agent(TODAY, tools=rec.toolbox())
+    report = run_agent(1, TODAY, tools=rec.toolbox())
     assert rec.calls.count("research") == 1
     assert report.research_used
     assert rec.recorded[2] is True  # research_used persisted
@@ -139,14 +150,14 @@ def test_ambiguous_state_escalates_tier():
         garmin=GarminToday(day=TODAY, readiness=20, body_battery=10),
         notion=NotionDay(day=TODAY, pain_level=6, pt_done=True),
     )
-    report = run_agent(TODAY, tools=rec.toolbox())
+    report = run_agent(1, TODAY, tools=rec.toolbox())
     assert report.tier == "quality"
 
 
 def test_invalid_proposal_gets_one_revision():
     bad = sane_session(TOMORROW, steps=[ExerciseStep(exercise="Box jump", sets=3, reps=5)])
     rec = Recorder(compose_outputs=[bad, sane_session(TOMORROW)])
-    report = run_agent(TODAY, tools=rec.toolbox())
+    report = run_agent(1, TODAY, tools=rec.toolbox())
     assert rec.calls.count("compose") == 2
     assert not report.fell_back
     assert report.session.title == "Upper push"
@@ -155,7 +166,7 @@ def test_invalid_proposal_gets_one_revision():
 def test_double_rejection_falls_back_conservatively():
     bad = sane_session(TOMORROW, steps=[ExerciseStep(exercise="Depth jump", sets=3, reps=5)])
     rec = Recorder(compose_outputs=[bad, bad])
-    report = run_agent(TODAY, tools=rec.toolbox())
+    report = run_agent(1, TODAY, tools=rec.toolbox())
     assert report.fell_back
     assert report.session.kind == "mobility"
     # the fallback still lands in the draft + gets recorded
@@ -165,12 +176,12 @@ def test_double_rejection_falls_back_conservatively():
 def test_tool_budget_is_enforced():
     rec = Recorder()
     with pytest.raises(ToolBudgetExceeded):
-        run_agent(TODAY, tools=rec.toolbox(), max_tool_calls=2)
+        run_agent(1, TODAY, tools=rec.toolbox(), max_tool_calls=2)
 
 
 def test_plan_for_today_targets_today_everywhere():
     rec = Recorder(compose_outputs=[sane_session(TODAY)])
-    report = run_agent(TODAY, tools=rec.toolbox(), plan_for=TODAY)
+    report = run_agent(1, TODAY, tools=rec.toolbox(), plan_for=TODAY)
     assert report.for_date == TODAY
     assert rec.draft[0]["for_date"] == TODAY.isoformat()
     assert rec.recorded[0] == TODAY
@@ -190,7 +201,7 @@ def test_base_template_schedules_by_id_without_rebuild(monkeypatch):
     tb = rec.toolbox()
     tb.schedule_workout = lambda wid, on: scheduled.append((wid, on))
     # create_garmin_workout still raises if called — proves no rebuild happened
-    run_agent(TODAY, tools=tb)
+    run_agent(1, TODAY, tools=tb)
     assert scheduled == [("1414015802", TOMORROW)]
 
 
@@ -211,6 +222,6 @@ def test_adapted_session_is_rebuilt_even_if_it_echoes_a_template_id(monkeypatch)
     tb = rec.toolbox()
     tb.schedule_workout = lambda wid, on: scheduled.append((wid, on))
     tb.create_garmin_workout = lambda s: (created.append(s), WorkoutRef(workout_id="777"))[1]
-    run_agent(TODAY, tools=tb)
+    run_agent(1, TODAY, tools=tb)
     assert created and created[0].steps[0].exercise == "Leg press"
     assert scheduled == [("777", TOMORROW)]

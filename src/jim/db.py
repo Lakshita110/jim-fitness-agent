@@ -59,19 +59,77 @@ def ensure_migrated() -> None:
         log.info("migrations applied")
 
 
-def kv_get(key: str) -> Any:
-    """Read a value from the kv store (None if absent)."""
+def kv_get(user_id: int, key: str) -> Any:
+    """Read a value from the kv store (None if absent), scoped to `user_id`."""
     with connect() as conn:
-        row = conn.execute("SELECT value FROM kv WHERE key = %s", (key,)).fetchone()
+        row = conn.execute(
+            "SELECT value FROM kv WHERE user_id = %s AND key = %s", (user_id, key)
+        ).fetchone()
     return row["value"] if row else None
 
 
-def kv_set(key: str, value: Any) -> None:
+def kv_set(user_id: int, key: str, value: Any) -> None:
     with connect() as conn:
         conn.execute(
-            "INSERT INTO kv (key, value, updated_ts) VALUES (%s, %s, now())"
-            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_ts = now()",
-            (key, json.dumps(value)),
+            "INSERT INTO kv (user_id, key, value, updated_ts) VALUES (%s, %s, %s, now())"
+            " ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_ts = now()",
+            (user_id, key, json.dumps(value)),
+        )
+        conn.commit()
+
+
+_CRED_FIELDS = ("garmin_password", "garmin_tokens", "notion_token")
+
+
+def get_user_credentials(user_id: int) -> dict | None:
+    """Decrypted credentials for `user_id`, or None if no row exists (shouldn't
+    happen post-signup, but callers should be defensive)."""
+    from jim import crypto
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_credentials WHERE user_id = %s", (user_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    out["garmin_password"] = (
+        crypto.decrypt(row["garmin_password_enc"]) if row.get("garmin_password_enc") else None
+    )
+    out["garmin_tokens"] = (
+        crypto.decrypt(row["garmin_tokens_enc"]) if row.get("garmin_tokens_enc") else None
+    )
+    out["notion_token"] = (
+        crypto.decrypt(row["notion_token_enc"]) if row.get("notion_token_enc") else None
+    )
+    return out
+
+
+def save_user_credentials(user_id: int, **fields: Any) -> None:
+    """Upsert whichever credential fields are passed, encrypting the
+    plaintext-named ones (`garmin_password`, `garmin_tokens`, `notion_token`)
+    into their `_enc` columns. Other fields (`garmin_email`,
+    `notion_knee_log_db_id`) are stored as-is."""
+    from jim import crypto
+
+    cols: list[str] = []
+    values: list[Any] = []
+    for name, value in fields.items():
+        if name in _CRED_FIELDS:
+            cols.append(f"{name}_enc")
+            values.append(crypto.encrypt(value) if value else None)
+        else:
+            cols.append(name)
+            values.append(value)
+    if not cols:
+        return
+    set_clause = ", ".join(f"{c} = %s" for c in cols)
+    with connect() as conn:
+        conn.execute(
+            f"INSERT INTO user_credentials (user_id, {', '.join(cols)})"
+            f" VALUES (%s, {', '.join(['%s'] * len(cols))})"
+            f" ON CONFLICT (user_id) DO UPDATE SET {set_clause}, updated_ts = now()",
+            (user_id, *values, *values),
         )
         conn.commit()
 
@@ -81,7 +139,16 @@ def migrate(conn: psycopg.Connection) -> None:
     simply re-run them all — no version table needed while the set is small.
 
     A missing pgvector extension only disables the research corpus (M4), so
-    that failure is downgraded to a warning instead of blocking the nightly run."""
+    that failure is downgraded to a warning instead of blocking the nightly run.
+
+    008_user_pks.sql's composite-PK promotion fails loudly (NotNullViolation)
+    on any table still carrying legacy user_id-less rows — by design, until
+    scripts/backfill_users.py has run. That's expected on a freshly-deployed
+    multi-tenant build before the operator has backfilled the existing athlete's
+    data, and it must not crash-loop the whole app in the meantime (every
+    DB-backed route calls ensure_migrated() on the request path) — so it's
+    downgraded to a warning too. It applies cleanly, permanently, the first
+    migrate() call after the backfill has run."""
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
         log.info("applying migration %s", path.name)
         try:
@@ -91,5 +158,10 @@ def migrate(conn: psycopg.Connection) -> None:
             conn.rollback()
             if 'extension "vector"' in str(e):
                 log.warning("skipping %s (pgvector unavailable): %s", path.name, e)
+                continue
+            if isinstance(e, psycopg.errors.NotNullViolation) and "user_id" in str(e):
+                log.warning(
+                    "skipping %s (user_id backfill not done yet): %s", path.name, e
+                )
                 continue
             raise

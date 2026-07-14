@@ -1,12 +1,13 @@
 # Jim
 
-A personal training agent (single user). Every night it reviews what actually
-happened (Garmin + a read-only Notion habit log), reasons about tomorrow
-within joint constraints, and drops a proposal into **Jim's chat** — a
-lightweight self-hosted chat where you iterate on the plan (or the whole
-week), keep long-term goals in plain language, and push to Garmin with one
-button. Chat-approved days are scheduled on the watch; the nightly run never
-overrides them.
+A personal training agent, multi-tenant — each signed-up account (email +
+password) connects its own Garmin and edits its own playbook. Every night it
+reviews what actually happened (Garmin + a read-only Notion habit log),
+reasons about tomorrow within that athlete's joint constraints, and drops a
+proposal into **Jim's chat** — a lightweight self-hosted chat where they
+iterate on the plan (or the whole week), keep long-term goals in plain
+language, and push to Garmin with one button. Chat-approved days are scheduled
+on the watch; the nightly run never overrides them.
 
 Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 [docs/architecture.md](docs/architecture.md). [PLAN.md](PLAN.md) is the original
@@ -30,24 +31,27 @@ workload ratio + recovery → push/steady/ease/rest, `tools/history.py`).
 src/jim/
   config.py          # PLAN §8 constants + guardrail bounds + env-backed secrets
   schemas.py         # typed tool contracts (PLAN §7)
-  db.py              # Postgres + idempotent migrations + kv store
-  migrations/        # additive, idempotent SQL (001-006); ships inside the package
+  db.py              # Postgres + idempotent migrations + kv store (composite user_id, key)
+  migrations/        # additive, idempotent SQL (001-008); ships inside the package
+  auth.py            # email+password signup/login, session cookies, _require_user
+  crypto.py          # AES-GCM encrypt/decrypt for Garmin/Notion creds at rest
   static/            # committed PWA icons (no Pillow at runtime)
   tools/             # garmin, notion (read-only), history, research (gated), memory
   agent/
     heuristics.py    # off-heuristic (gates research) + tier escalation
     compose.py       # the one generative step: state -> StructuredSession JSON
     validate.py      # hard safety guardrail + advisory balance + fallback
-    loop.py          # run_agent: bounded, injectable toolbox
-  jobs/              # nightly.py (sync + reconcile + plan) and reconcile.py
-  playbook.py        # loads playbook/ (base workouts + PT + directives) into context
+    loop.py          # run_agent(user_id, today): bounded, injectable toolbox
+  jobs/              # nightly.py (per-user sync + reconcile + plan, fanned out) + reconcile.py
+  playbook.py        # per-account playbook (Postgres JSONB); disk YAML is the signup seed
   coach.py           # Jim's chat: iterate on drafts, goals memory, approve -> Garmin
-  app.py             # FastAPI: health, /run, /api/cron/nightly, /chat + PWA
+  app.py             # FastAPI: health, /run, /api/cron/nightly, /auth/*,
+                      #   /settings/garmin/*, /api/playbook, /chat + PWA
 api/index.py         # Vercel entrypoint — re-exports app.app as the ASGI handler
 playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
 data/corpus/         # curated research corpus (seeded by scripts/seed_corpus.py)
 docs/                # architecture, chat, memory, garmin_strength, notion_schema
-scripts/             # m1_roundtrip.py, backfill.py, garmin_login.py, seed_corpus.py
+scripts/             # m1_roundtrip.py, backfill.py, backfill_users.py, garmin_login.py, seed_corpus.py
 evals/               # M5 scaffold: plan quality / tool use / cost
 tests/               # offline only — recorded fixtures, no live APIs
 ```
@@ -77,7 +81,7 @@ python evals/run_evals.py
 
 ```bash
 python -m jim.jobs.nightly        # the nightly run: reconcile today + plan tomorrow
-uvicorn jim.app:app --reload      # local service; chat at /chat?key=<CHAT_SECRET>
+uvicorn jim.app:app --reload      # local service; sign in/up at /login, chat at /chat
 python scripts/backfill.py 90     # backfill Garmin history into Postgres
 ```
 

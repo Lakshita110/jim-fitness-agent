@@ -53,22 +53,22 @@ class Toolbox:
     schedule_workout: Callable[..., None]
 
     @classmethod
-    def live(cls) -> "Toolbox":
+    def live(cls, user_id: int) -> "Toolbox":
         from jim.db import kv_get, kv_set
         from jim.tools import garmin, history, memory, notion, research
 
         return cls(
-            get_garmin_today=garmin.get_garmin_today,
-            get_notion_logs=notion.get_notion_logs,
-            query_history=history.query_history,
+            get_garmin_today=lambda d: garmin.get_garmin_today(user_id, d),
+            get_notion_logs=lambda d: notion.get_notion_logs(user_id, d),
+            query_history=lambda d: history.query_history(user_id, d),
             research_training=research.research_training,
             compose_session=compose.compose_session,
-            save_draft=lambda sessions: kv_set("draft", sessions),
-            record_suggestion=memory.record_suggestion,
-            chat_planned=memory.chat_planned,
-            load_goals=lambda: kv_get("goals") or "",
-            create_garmin_workout=garmin.create_garmin_workout,
-            schedule_workout=garmin.schedule_workout,
+            save_draft=lambda sessions: kv_set(user_id, "draft", sessions),
+            record_suggestion=lambda *a, **kw: memory.record_suggestion(user_id, *a, **kw),
+            chat_planned=lambda d: memory.chat_planned(user_id, d),
+            load_goals=lambda: kv_get(user_id, "goals") or "",
+            create_garmin_workout=lambda s: garmin.create_garmin_workout(user_id, s),
+            schedule_workout=lambda wid, on: garmin.schedule_workout(user_id, wid, on),
         )
 
 
@@ -86,6 +86,7 @@ class RunReport:
 
 
 def run_agent(
+    user_id: int,
     today: date,
     tools: Toolbox | None = None,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -95,8 +96,8 @@ def run_agent(
     """Plan the session for `plan_for` (default: tomorrow — the nightly run)."""
     from jim.playbook import load_playbook
 
-    tools = tools or Toolbox.live()
-    playbook = playbook if playbook is not None else load_playbook()
+    tools = tools or Toolbox.live(user_id)
+    playbook = playbook if playbook is not None else load_playbook(user_id)
     target = plan_for or (today + timedelta(days=1))
     report = RunReport(for_date=target)
 

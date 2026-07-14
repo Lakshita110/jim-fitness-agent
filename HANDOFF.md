@@ -8,10 +8,12 @@ garmin_strength, notion_schema). `PLAN.md` is the original design record.
 
 ## What Jim is
 
-A single-user personal training agent. Nightly it reviews the day (Garmin + a
-read-only Notion habit/knee log), reasons about tomorrow within knee/ankle
-constraints, and drops a proposal into **Jim's chat** — a self-hosted page where
-you iterate on the plan and push structured workouts to Garmin on approve.
+A personal training agent, multi-tenant: each signed-up account connects its
+own Garmin, edits its own playbook, and gets its own nightly run. Nightly it
+reviews the day (Garmin + a read-only Notion habit/knee log), reasons about
+tomorrow within that athlete's knee/ankle constraints, and drops a proposal
+into **Jim's chat** — a self-hosted page where they iterate on the plan and
+push structured workouts to Garmin on approve.
 Python 3.11+, FastAPI, Postgres, OpenRouter (via the `openai` SDK),
 `garminconnect`. No build step — the whole chat UI is one inline HTML string in
 `src/jim/app.py`.
@@ -54,7 +56,8 @@ cp .env.example .env
 - `NOTION_TOKEN` — optional; leave blank to run without it (the Pain card and
   Notion context just hide; everything else works).
 - `DATABASE_URL=postgresql://jim:jim@localhost:5432/jim`
-- `CHAT_SECRET` — any long random string (goes in the chat URL once).
+- `SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY` — long random strings (auth is
+  now email+password at `/login`, not a shared URL key — see `docs/chat.md`).
 - `APP_TIMEZONE` — yours.
 
 `CRON_SECRET` and `GARMIN_TOKENS` are for the serverless deploy only (DEPLOY.md);
@@ -64,13 +67,15 @@ Verify, then run:
 
 ```bash
 ruff check .
-pytest                            # 138 tests, all offline
+pytest                            # 224 tests, all offline
 python scripts/backfill.py 120    # first run: pull ~120d of Garmin history
 uvicorn jim.app:app --reload
 ```
 
-Open **http://127.0.0.1:8000/chat?key=YOUR_CHAT_SECRET**. The key sets a session
-cookie, so subsequent visits don't need it. Try "plan my week" or "my knee is
+Open **http://127.0.0.1:8000/login** and sign up (or run
+`python scripts/backfill_users.py` to create the original athlete's account
+from the credentials already in `.env`). Signing in sets a session cookie, so
+subsequent visits go straight to `/chat`. Try "plan my week" or "my knee is
 sore today".
 
 ## Gotchas learned the hard way

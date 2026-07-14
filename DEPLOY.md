@@ -79,7 +79,8 @@ Project → **Settings → Environment Variables**:
 
 | Key | Value |
 |---|---|
-| `CHAT_SECRET` | random string from step 1 |
+| `SESSION_SECRET` | random string from step 1 |
+| `CREDENTIAL_ENCRYPTION_KEY` | another random 32-byte base64 key from step 1 |
 | `CRON_SECRET` | the other random string from step 1 |
 | `GARMIN_TOKENS` | the session blob from step 1 |
 | `GARMIN_EMAIL` | your Garmin email |
@@ -91,6 +92,11 @@ Project → **Settings → Environment Variables**:
 
 `DATABASE_URL` is already there from step 2.
 
+`GARMIN_TOKENS`/`GARMIN_EMAIL` only bootstrap the *original* athlete's account
+(consumed by `scripts/backfill_users.py`, below) — every other account
+connects Garmin itself through `/settings/garmin` in the browser, and its
+credentials live encrypted in `user_credentials`, not in an env var.
+
 ## 5. Deploy and check
 
 ```bash
@@ -98,6 +104,24 @@ curl https://<your-app>.vercel.app/health          # {"status":"ok"}
 ```
 
 The first chat request applies the migrations automatically.
+
+**Deployment ordering (existing single-user data only):** if this deploy has
+prior single-user data (`garmin_daily`, `kv`, etc. with no `user_id` yet),
+migration `008_user_pks.sql` — which promotes those tables to composite
+`(user_id, …)` primary keys — will fail and log a *warning*, not crash the
+request, until `scripts/backfill_users.py` has been run against production to
+give every existing row a `user_id`. This is the same downgrade-to-warning
+behavior `db.py`'s `migrate()` already has for a missing `pgvector` extension.
+Run the backfill once, against the Neon `DATABASE_URL`, before or after this
+deploy — `008` applies cleanly and permanently on the next migration pass once
+it has:
+
+```bash
+DATABASE_URL="postgres://…neon…" python scripts/backfill_users.py you@example.com
+```
+
+A brand-new deployment with no pre-existing data has nothing to backfill —
+`008` applies immediately since there are no NULL `user_id` rows to violate it.
 
 ## 6. (Optional) Backfill history
 
@@ -116,29 +140,31 @@ showing stale "no data" for up to an hour.
 
 ## 7. Put it on your phone 📱
 
-Open the chat **on your phone**:
+Open the login page **on your phone**:
 
 ```
-https://<your-app>.vercel.app/chat?key=YOUR_CHAT_SECRET
+https://<your-app>.vercel.app/login
 ```
 
-Then install it — it's a real PWA, so it gets its own icon and opens fullscreen
-with no browser chrome:
+Sign in (or sign up — see `scripts/backfill_users.py` for creating the
+original athlete's account from the credentials already in Vercel's env
+vars), then install it — it's a real PWA, so it gets its own icon and opens
+fullscreen with no browser chrome:
 
 - **iOS / Safari** — Share → **Add to Home Screen**
 - **Android / Chrome** — ⋮ → **Install app**
 
-The installed app launches straight into the chat. You only ever type the key
-once: a valid `?key=` sets an httpOnly session cookie (~13 months) and the
+The installed app launches straight into the chat. You only ever log in once:
+a successful sign-in sets an httpOnly session cookie (~13 months) and the
 manifest's `start_url` is the bare `/chat`, authenticated by that cookie. No
 secret is baked into the manifest or the icons, which is why the browser can
 fetch both during install.
 
-> **The key is the only thing protecting your chat.** Anyone with that URL can talk
-> to Jim and push workouts to your watch. Don't paste it anywhere public. To
-> rotate: change `CHAT_SECRET` in Vercel and redeploy — every existing session
-> cookie is derived from the secret, so they all invalidate at once and each
-> device has to re-enter the new key.
+> **Your password is the only thing protecting your chat.** Anyone who signs in
+> can talk to Jim and push workouts to your watch. To invalidate every session
+> at once (e.g. after rotating secrets): change `SESSION_SECRET` in Vercel and
+> redeploy — every existing session cookie is signed with the old key, so they
+> all stop verifying and each device has to sign in again.
 
 ---
 
@@ -197,3 +223,14 @@ day; an earlier run would plan tomorrow before today finished.
 
 **Cron 403s** — `CRON_SECRET` isn't set, or doesn't match. Vercel sends it as
 `Authorization: Bearer $CRON_SECRET`.
+
+**"No pending Garmin login (or it expired) — start again"** on the
+`/settings/garmin/mfa` step — known limitation, not a security issue. The
+pending-MFA state (`_pending_garmin_logins` in `app.py`) lives in a
+process-local dict, and Vercel serverless gives no guarantee that the request
+carrying your MFA code lands on the same warm instance that issued the
+challenge. It's usually transient — retry `/settings/garmin/connect` from the
+top. A user who hits it repeatedly can fall back to
+`python scripts/garmin_login.py` run locally (interactive, no serverless
+instance-affinity problem) to mint a token blob, though the self-service
+`/settings/garmin` flow is meant to make that unnecessary for most people.

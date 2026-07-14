@@ -4,7 +4,6 @@
 import json
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
 
 import jim.tools.notion as notion
 from jim.tools.notion import parse_knee_log_page
@@ -97,15 +96,14 @@ def test_get_notion_logs_range_follows_pagination(monkeypatch):
     ]
     seen = []
 
-    def fake_query(db_id, **kwargs):
+    def fake_query(user_id, db_id, **kwargs):
         seen.append(kwargs.get("start_cursor"))
         return pages[len(seen) - 1]
 
     monkeypatch.setattr(notion, "_query", fake_query)
-    monkeypatch.setattr(notion, "settings",
-                        lambda: SimpleNamespace(notion_knee_log_db_id="db"))
+    monkeypatch.setattr(notion, "_knee_log_db_id", lambda user_id: "db")
 
-    days = notion.get_notion_logs_range(date(2026, 7, 1), DAY)
+    days = notion.get_notion_logs_range(1, date(2026, 7, 1), DAY)
     assert [d.day for d in days] == [date(2026, 7, 6), date(2026, 7, 4)]
     assert [d.pain_notes for d in days] == ["wrists", "driving"]
     assert seen == [None, "c1"]  # second call carried the cursor
@@ -116,10 +114,9 @@ def test_get_notion_logs_range_skips_pages_with_no_date(monkeypatch):
     guessing, which would corrupt the pain history."""
     monkeypatch.setattr(
         notion, "_query",
-        lambda db_id, **kw: {"results": [_page("2026-07-06", "ok"),
-                                         {"properties": {}}], "has_more": False},
+        lambda user_id, db_id, **kw: {"results": [_page("2026-07-06", "ok"),
+                                                  {"properties": {}}], "has_more": False},
     )
-    monkeypatch.setattr(notion, "settings",
-                        lambda: SimpleNamespace(notion_knee_log_db_id="db"))
-    days = notion.get_notion_logs_range(date(2026, 7, 1), DAY)
+    monkeypatch.setattr(notion, "_knee_log_db_id", lambda user_id: "db")
+    days = notion.get_notion_logs_range(1, date(2026, 7, 1), DAY)
     assert [d.day for d in days] == [DAY]

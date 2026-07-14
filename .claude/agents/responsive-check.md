@@ -15,8 +15,9 @@ The local server should already be running at `http://127.0.0.1:8000`. Confirm
 with `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health`. If it
 isn't up, say so and stop — do not start it yourself.
 
-The chat needs a key: read `CHAT_SECRET` from `.env` and open
-`http://127.0.0.1:8000/chat?key=<CHAT_SECRET>`.
+The chat needs a login: open `http://127.0.0.1:8000/login` and sign in (or
+sign up if no account exists locally yet). A successful login redirects to
+`/chat`, authenticated by a session cookie.
 
 ## What to check
 

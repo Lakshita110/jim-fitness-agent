@@ -1,0 +1,10 @@
+# Generic starter seed for a new signup (see playbook.py:_load_default_playbook).
+# The committed playbook/base_workouts.yaml is the original athlete's own content
+# (real garmin_workout_ids, knee-specific programming) and must never be a new
+# user's starting point. This file intentionally has no rotation and no workouts
+# with a garmin_workout_id — edit it (or the whole playbook) in Settings ->
+# Playbook once you've connected Garmin and know your own workout IDs.
+
+rotation: []
+
+workouts: {}

@@ -14,13 +14,15 @@ flowchart TB
 
     subgraph vercel["Vercel"]
         subgraph web["web service (FastAPI)"]
-            CHATUI["/chat page + API + PWA<br/>CHAT_SECRET → session cookie"]
-            COACH["coach.py<br/>conversation engine<br/>MODEL_FAST via OpenRouter"]
+            CHATUI["/chat page + API + PWA<br/>/login email+password → session cookie"]
+            SETTINGS["/settings/garmin, /api/playbook<br/>Garmin connect + playbook editor"]
+            COACH["coach.py<br/>conversation engine, per user_id<br/>MODEL_FAST via OpenRouter"]
         end
-        CRON["nightly cron 20:00 UTC<br/>/api/cron/nightly → jobs/nightly.py"]
+        CRON["nightly cron 20:00 UTC<br/>/api/cron/nightly → run_nightly()<br/>fans out over every nightly_enabled user"]
         subgraph pg["Postgres"]
-            KV["kv: chat history · working draft ·<br/>goals · pushed map · state cache"]
-            TABLES["garmin_daily · activities ·<br/>exercise_sets (reps+kg per set) ·<br/>notion_daily_log · suggestions ·<br/>outcomes · research_corpus"]
+            USERS["users · user_credentials (Garmin/Notion,<br/>AES-GCM encrypted) · playbooks"]
+            KV["kv (user_id, key): chat history ·<br/>working draft · goals · pushed map · state cache"]
+            TABLES["garmin_daily · activities ·<br/>exercise_sets (reps+kg per set) ·<br/>notion_daily_log · suggestions ·<br/>outcomes · research_corpus<br/>— all user_id-scoped"]
         end
     end
 
@@ -51,6 +53,7 @@ flowchart TB
     VALIDATE -->|"proposal = draft"| KV
 
     PHONE <--> CHATUI <--> COACH
+    PHONE <--> SETTINGS -->|"encrypted creds ·<br/>playbook JSON"| USERS
     COACH <--> KV
     COACH -->|"draft days"| VALIDATE
     COACH <--> EXH & WKH & RESEARCH
@@ -70,14 +73,21 @@ goblet squats," it calls `exercise_history("goblet squat")`, sees
 `2026-07-05: 3x12 @ 16kg`, and prescribes conservatively from reality.
 
 **Nightly** (`jobs/nightly.py`, Vercel Cron at 20:00 UTC — deliberately after
-the training day) — sync today's Garmin + Notion into Postgres → reconcile
-today's plan vs. actuals → *if you already chat-planned tomorrow, stop* →
-otherwise: read state + playbook + goals → cheap-heuristic research gate →
-compose (one LLM call, escalating to the quality tier only on ambiguous
-state) → guardrail → the proposal lands as the **chat draft**. Nothing is
-pushed unattended (AUTO_PUSH stays off until the M5 evals gate it). The whole
-run must finish inside the function's `maxDuration`, so it returns
-`elapsed_sec`.
+the training day) — `run_nightly()` selects every `users` row with
+`nightly_enabled = true` and runs the per-user pipeline for each in turn: sync
+today's Garmin + Notion into Postgres (that user's own credentials, that
+user's own `users.timezone` for "today") → reconcile today's plan vs. actuals
+→ *if they already chat-planned tomorrow, stop* → otherwise: read state +
+playbook + goals → cheap-heuristic research gate → compose (one LLM call,
+escalating to the quality tier only on ambiguous state) → guardrail → the
+proposal lands as that user's **chat draft**. One user's failure (expired
+Garmin creds, Notion down, an unhandled error) is caught and logged at the
+per-user boundary — it doesn't stop the rest of the run. Nothing is pushed
+unattended (AUTO_PUSH stays off until the M5 evals gate it). The whole run
+must finish inside the function's `maxDuration`, so it returns `elapsed_sec`
+alongside a per-user result map. Cost scales with the number of
+`nightly_enabled` users — `MAX_TOOL_CALLS`/model-tier budgets are sized for
+one run, not N.
 
 **Any time, in chat** (`coach.py`) — one continuous conversation. Each turn:
 state snapshot (cached 1h, each source degrading independently) + playbook +
@@ -98,6 +108,21 @@ previous one first, so the watch never ends up with duplicates. Pushed days are
 recorded `source='chat'` (the nightly run steps aside for them) and tracked in
 the `pushed` kv map with a content hash, which is what lets the UI badge a day
 as *pushed* or *modified since push*.
+
+## Multi-tenant data model
+
+One deployment, one Postgres, any number of `users` rows — isolation is
+enforced by `user_id`, not by separate databases. `users` holds login +
+`timezone` + `nightly_enabled`; `user_credentials` holds each account's Garmin
+email/password and Notion token, AES-GCM encrypted at rest
+(`crypto.py`, key in `CREDENTIAL_ENCRYPTION_KEY`, never in the DB); `playbooks`
+holds one JSONB row per account (base workouts, PT routines, rotation,
+directives — edited via `/api/playbook`, seeded generic at signup). Every
+history table (`kv`, `garmin_daily`, `garmin_activities`, `exercise_sets`,
+`notion_daily_log`, `suggestions`, `outcomes`) carries `user_id` as part of its
+primary key. `tools/garmin.py`/`tools/notion.py` keep a per-`user_id` client
+cache (a plain dict, since each serverless instance is single-process); every
+`Toolbox`/`CoachDeps` lambda closes over the `user_id` it was built for.
 
 ## Memory hierarchy
 

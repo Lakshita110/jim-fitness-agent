@@ -4,20 +4,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 import jim.app as app_mod
+from jim.auth import User
 
 client = TestClient(app_mod.app)
+
+TEST_USER = User(id=1, email="athlete@example.com")
 
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    """Signing in sets a session cookie, and TestClient keeps cookies — so without
-    this, one test's sign-in would silently authenticate the next test's
-    "bad key must be rejected" assertions.
+    """A session cookie persists across requests in TestClient's cookie jar, so
+    without this, one test's sign-in would silently authenticate the next
+    test's "no cookie -> 403" assertions.
 
-    Also stub `_ready()`: these are unit tests of routing/auth/serialization with
-    `coach` mocked, so the schema-migration step is not under test. Left real, it
-    calls db.ensure_migrated() → connect(), which now hard-raises without a live
-    DATABASE_URL and turns every chat-endpoint test into a 500."""
+    Also stub `_ready()`: these are unit tests of routing/auth/serialization
+    with `coach`/`auth` mocked, so the schema-migration step is not under
+    test. Left real, it calls db.ensure_migrated() -> connect(), which
+    hard-raises without a live DATABASE_URL and turns every DB-backed route
+    into a bare 500."""
     monkeypatch.setattr(app_mod, "_ready", lambda: None)
     client.cookies.clear()
     yield
@@ -25,73 +29,97 @@ def _fresh_session(monkeypatch):
 
 
 def fake_settings():
-    return SimpleNamespace(
-        chat_secret="s3cret", app_timezone="America/New_York", cron_secret="cr0n"
+    return SimpleNamespace(app_timezone="America/New_York", cron_secret="cr0n")
+
+
+def _sign_in(monkeypatch, c=client, user=TEST_USER):
+    """Fake login: stub out real password/DB auth, then go through the actual
+    /auth/login route so the cookie is set the same way a browser's would be
+    (TestClient's cookie jar only reliably tracks cookies it received via a
+    Set-Cookie response header, not ones poked into the jar directly)."""
+    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: user)
+    monkeypatch.setattr(
+        app_mod.auth, "get_user_by_id", lambda uid: user if uid == user.id else None
     )
+    r = c.post("/auth/login", json={"email": user.email, "password": "irrelevant"})
+    assert r.status_code == 200, r.text
 
 
 def test_health():
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_chat_page_requires_key(monkeypatch):
+def test_chat_page_redirects_to_login_when_unauthenticated(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    assert client.get("/chat").status_code == 403
-    assert client.get("/chat", params={"key": "wrong"}).status_code == 403
-    # A good key signs in: 303 -> /chat, which TestClient follows to the page.
-    ok = client.get("/chat", params={"key": "s3cret"})
+    r = client.get("/chat", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_chat_page_serves_when_authenticated(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    _sign_in(monkeypatch)
+    ok = client.get("/chat")
     assert ok.status_code == 200
     assert "Jim" in ok.text
-    assert str(ok.url).endswith("/chat")  # redirected to the clean URL
 
 
-def test_chat_disabled_without_secret(monkeypatch):
-    monkeypatch.setattr(
-        app_mod, "settings",
-        lambda: SimpleNamespace(chat_secret="", app_timezone="America/New_York"),
-    )
-    # no secret configured -> chat is off, even with an empty key
-    assert client.get("/chat", params={"key": ""}).status_code == 403
+def test_login_page_is_public():
+    r = client.get("/login")
+    assert r.status_code == 200
+    assert "Jim" in r.text
 
 
 def test_chat_message_flow(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     monkeypatch.setattr(
         app_mod.coach, "converse",
-        lambda text, scope_date=None: {"reply": f"echo: {text}", "draft": [], "scope": scope_date},
+        lambda text, user_id, scope_date=None: {
+            "reply": f"echo: {text}", "draft": [], "scope": scope_date,
+        },
     )
-    r = client.post("/chat/message", json={"key": "s3cret", "text": "knee sore"})
+    # No cookie -> shut, even for a well-formed body.
+    assert client.post("/chat/message", json={"text": "knee sore"}).status_code == 403
+
+    _sign_in(monkeypatch)
+    r = client.post("/chat/message", json={"text": "knee sore"})
     assert r.status_code == 200
     assert r.json() == {"reply": "echo: knee sore", "draft": [], "scope": None}
     # scope_date is threaded through to the coach
-    r2 = client.post("/chat/message",
-                     json={"key": "s3cret", "text": "easier", "scope_date": "2026-07-14"})
+    r2 = client.post("/chat/message", json={"text": "easier", "scope_date": "2026-07-14"})
     assert r2.json()["scope"] == "2026-07-14"
-    assert client.post("/chat/message", json={"key": "bad", "text": "x"}).status_code == 403
-    assert client.post("/chat/message", json={"key": "s3cret", "text": "  "}).status_code == 400
+    assert client.post("/chat/message", json={"text": "  "}).status_code == 400
 
 
 def test_chat_approve_clear_state(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(app_mod.coach, "approve", lambda: "Pushed to Garmin:\n2026-07-09: ok")
+    monkeypatch.setattr(
+        app_mod.coach, "approve", lambda user_id: "Pushed to Garmin:\n2026-07-09: ok"
+    )
     cleared = []
-    monkeypatch.setattr(app_mod.coach, "clear", lambda: cleared.append(True))
+    monkeypatch.setattr(app_mod.coach, "clear", lambda user_id: cleared.append(True))
     monkeypatch.setattr(
         app_mod.coach, "current_state",
-        lambda: {"history": [], "draft": [], "goals": "g", "push_status": {}},
+        lambda user_id: {"history": [], "draft": [], "goals": "g", "push_status": {}},
     )
 
-    r = client.post("/chat/approve", json={"key": "s3cret"})
+    assert client.post("/chat/approve", json={}).status_code == 403  # no cookie
+
+    _sign_in(monkeypatch)
+    r = client.post("/chat/approve", json={})
     assert r.status_code == 200 and "Pushed" in r.json()["summary"]
     assert r.json()["push_status"] == {}
-    assert client.post("/chat/approve", json={"key": "bad"}).status_code == 403
 
-    assert client.post("/chat/clear", json={"key": "s3cret"}).json() == {"ok": True}
+    assert client.post("/chat/clear", json={}).json() == {"ok": True}
     assert cleared == [True]
 
-    s = client.get("/chat/state", params={"key": "s3cret"})
+    s = client.get("/chat/state")
     assert s.json()["goals"] == "g"
-    assert client.get("/chat/state", params={"key": "no"}).status_code == 403
+
+
+def test_chat_state_requires_cookie(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    assert client.get("/chat/state").status_code == 403
 
 
 def test_chat_push_day(monkeypatch):
@@ -99,14 +127,18 @@ def test_chat_push_day(monkeypatch):
     seen = {}
     monkeypatch.setattr(
         app_mod.coach, "push_day",
-        lambda date: seen.update(date=date) or {"summary": f"Pushed {date}",
-                                                "draft": [], "push_status": {date: "pushed"}},
+        lambda date, user_id: seen.update(date=date) or {
+            "summary": f"Pushed {date}", "draft": [], "push_status": {date: "pushed"},
+        },
     )
-    r = client.post("/chat/push-day", json={"key": "s3cret", "date": "2026-07-14"})
+    r0 = client.post("/chat/push-day", json={"date": "2026-07-14"})
+    assert r0.status_code == 403  # no cookie
+
+    _sign_in(monkeypatch)
+    r = client.post("/chat/push-day", json={"date": "2026-07-14"})
     assert r.status_code == 200
     assert r.json()["summary"] == "Pushed 2026-07-14"
     assert r.json()["push_status"] == {"2026-07-14": "pushed"}
-    assert client.post("/chat/push-day", json={"key": "bad", "date": "x"}).status_code == 403
 
 
 def test_cron_nightly_requires_vercel_bearer(monkeypatch):
@@ -118,7 +150,8 @@ def test_cron_nightly_requires_vercel_bearer(monkeypatch):
     ran = []
     monkeypatch.setattr(
         nightly_mod, "run_nightly",
-        lambda: ran.append(True) or {"for_date": "2026-07-13", "elapsed_sec": 12.3},
+        lambda: ran.append(True)
+        or {"users": {1: {"for_date": "2026-07-13"}}, "elapsed_sec": 12.3},
     )
 
     assert client.get("/api/cron/nightly").status_code == 403
@@ -130,6 +163,7 @@ def test_cron_nightly_requires_vercel_bearer(monkeypatch):
     r = client.get("/api/cron/nightly", headers={"Authorization": "Bearer cr0n"})
     assert r.status_code == 200
     assert r.json()["elapsed_sec"] == 12.3
+    assert r.json()["users"] == {"1": {"for_date": "2026-07-13"}}
     assert ran == [True]
 
 
@@ -137,58 +171,79 @@ def test_cron_nightly_shut_when_no_secret_configured(monkeypatch):
     """No CRON_SECRET => endpoint stays closed, rather than defaulting to open."""
     monkeypatch.setattr(
         app_mod, "settings",
-        lambda: SimpleNamespace(chat_secret="s3cret", app_timezone="UTC", cron_secret=""),
+        lambda: SimpleNamespace(app_timezone="UTC", cron_secret=""),
     )
     assert client.get(
         "/api/cron/nightly", headers={"Authorization": "Bearer "}
     ).status_code == 403
 
 
-def test_key_signs_in_then_cookie_carries_the_session(monkeypatch):
-    """?key= is a one-time sign-in: it sets the session cookie and redirects to a
-    clean /chat, so the secret stops living in the URL and browser history."""
+# --- /auth/* routes -------------------------------------------------------------
+
+
+def test_signup_creates_user_and_sets_cookie(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    c = TestClient(app_mod.app)
-
-    # No key, no cookie -> shut.
-    assert c.get("/chat", follow_redirects=False).status_code == 403
-
-    # Signing in with the key redirects to the bare /chat and sets the cookie.
-    r = c.get("/chat", params={"key": "s3cret"}, follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/chat"
-    assert app_mod.SESSION_COOKIE in r.cookies
-
-    # The cookie holds a DERIVED token, never the shareable key itself.
-    assert r.cookies[app_mod.SESSION_COOKIE] != "s3cret"
-
-    # From now on the clean URL works, with no key anywhere.
-    page = c.get("/chat")
-    assert page.status_code == 200 and "Jim" in page.text
-    assert "key=" not in page.text  # nothing leaks the secret into the HTML
+    monkeypatch.setattr(app_mod.auth, "create_user", lambda email, password: TEST_USER)
+    r = client.post("/auth/signup", json={"email": "athlete@example.com", "password": "hunter2"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert app_mod.auth.SESSION_COOKIE_NAME in r.cookies
 
 
-def test_api_routes_accept_the_cookie_without_a_key(monkeypatch):
+def test_signup_duplicate_email_returns_400_with_message(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(app_mod.coach, "current_state", lambda: {"draft": [], "goals": ""})
-    monkeypatch.setattr(app_mod, "_ready", lambda: None)
-    c = TestClient(app_mod.app)
 
-    assert c.get("/chat/state").status_code == 403  # cold: no cookie
-    c.get("/chat", params={"key": "s3cret"})        # sign in
-    assert c.get("/chat/state").status_code == 200  # cookie alone is enough
+    def raise_dup(email, password):
+        raise ValueError("an account with this email already exists")
+
+    monkeypatch.setattr(app_mod.auth, "create_user", raise_dup)
+    r = client.post("/auth/signup", json={"email": "dup@example.com", "password": "x"})
+    assert r.status_code == 400
+    assert "already exists" in r.json()["detail"]
+    assert app_mod.auth.SESSION_COOKIE_NAME not in r.cookies
 
 
-def test_forged_cookie_is_rejected(monkeypatch):
+def test_login_success_sets_cookie(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    c = TestClient(app_mod.app)
-    c.cookies.set(app_mod.SESSION_COOKIE, "not-the-real-token")
-    assert c.get("/chat").status_code == 403
+    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: TEST_USER)
+    r = client.post("/auth/login", json={"email": "athlete@example.com", "password": "hunter2"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert app_mod.auth.SESSION_COOKIE_NAME in r.cookies
+
+
+def test_login_failure_is_generic_for_wrong_password_and_unknown_email(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: None)
+
+    wrong_pw = client.post("/auth/login", json={"email": "athlete@example.com", "password": "bad"})
+    unknown = client.post("/auth/login", json={"email": "ghost@example.com", "password": "x"})
+
+    assert wrong_pw.status_code == 401 and unknown.status_code == 401
+    assert wrong_pw.json() == unknown.json() == {"detail": "invalid email or password"}
+    assert app_mod.auth.SESSION_COOKIE_NAME not in wrong_pw.cookies
+    assert app_mod.auth.SESSION_COOKIE_NAME not in unknown.cookies
+
+
+def test_logout_clears_cookie_and_subsequent_requests_are_unauthenticated(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    _sign_in(monkeypatch)
+    assert client.get("/chat/state").status_code != 403  # signed in first
+
+    r = client.post("/auth/logout")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+
+    assert client.get("/chat/state").status_code == 403
+
+
+def test_forged_cookie_resolves_to_unauthenticated_not_a_crash(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    client.cookies.set(app_mod.auth.SESSION_COOKIE_NAME, "not-a-real-token")
+    r = client.get("/chat", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"  # bounced, no crash
+    assert client.get("/chat/state").status_code == 403
 
 
 def test_manifest_is_public_and_carries_no_secret(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     r = client.get("/manifest.webmanifest")
-    assert r.status_code == 200                     # installable without a key
-    assert r.json()["start_url"] == "/chat"         # clean start_url
-    assert "s3cret" not in r.text
+    assert r.status_code == 200                     # installable without signing in
+    assert r.json()["start_url"] == "/chat"          # clean start_url

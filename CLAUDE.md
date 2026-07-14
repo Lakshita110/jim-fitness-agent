@@ -1,11 +1,15 @@
 # CLAUDE.md — Jim
 
-Jim is a single-user personal training agent. It reviews what actually happened
-(Garmin + a read-only Notion habit/knee log), reasons about the next session
-within knee/ankle constraints, and proposes a plan you iterate on in a chat.
-Workouts reach the watch only when you press a button.
+Jim is a personal training agent, now multi-tenant: any number of athletes can
+sign up with email + password, each connecting their own Garmin account and
+editing their own playbook. For each account, nightly it reviews what actually
+happened (Garmin + a read-only Notion habit/knee log), reasons about the next
+session within that athlete's knee/ankle constraints, and proposes a plan they
+iterate on in their own chat. Workouts reach the watch only when the athlete
+presses a button.
 
-Not a product. One athlete, one thread, no auth beyond a shared secret.
+Not a product. Real accounts, real isolation (`user_id`-scoped Postgres +
+`kv`), but still one deployment, one Postgres, one operator.
 
 ## The shape of it
 
@@ -48,9 +52,12 @@ Garmin's real taxonomy — see `tools/exercise_match.py`.)
 | `agent/heuristics.py` | Cheap code that decides *whether to research* and *which model tier* — before any tokens are spent. |
 | `agent/compose.py` | The one generative step. |
 | `agent/validate.py` | The guardrail. Read the module docstring; the reasoning matters. |
-| `agent/loop.py` | `run_agent`: bounded, single-shot, injectable toolbox. |
-| `coach.py` | The chat: conversation, lookups, draft merging, goals memory, pushing. |
-| `app.py` | FastAPI: `/health`, `/run`, `/api/cron/nightly`, the `/chat` API — and the entire chat UI as one inline HTML string. |
+| `agent/loop.py` | `run_agent(user_id, today)`: bounded, single-shot, injectable toolbox. |
+| `playbook.py` | `load_playbook(user_id)`/`save_playbook` — the JSONB `playbooks` row per account; disk YAML is only the seed source now. |
+| `auth.py` | Email + password signup/login, signed session cookies (`itsdangerous`), `_require_user`. |
+| `crypto.py` | AES-GCM encrypt/decrypt for Garmin/Notion credentials at rest (`CREDENTIAL_ENCRYPTION_KEY`). |
+| `coach.py` | The chat: conversation, lookups, draft merging, goals memory, pushing — all `user_id`-scoped. |
+| `app.py` | FastAPI: `/health`, `/run`, `/api/cron/nightly`, `/auth/*`, `/settings/garmin/*`, `/api/playbook`, the `/chat` API — and the entire chat UI as one inline HTML string. |
 
 ## Load-bearing decisions
 
@@ -94,6 +101,13 @@ stock Full Body A landed on the watch.
 `exercise_history("goblet squat")` and reads back actual sets × reps @ kg from
 the watch, then progresses conservatively. Don't let it guess.
 
+**Isolation is enforced in code and schema, not by physical separation.** One
+Postgres, one deployment, every athlete's row carries `user_id` — `kv` as a
+composite `(user_id, key)` primary key, every history table the same. A missed
+`WHERE user_id = %s` or a closure that captures the wrong id is a silent
+cross-account leak, not a crash, which is why `tests/test_multi_user_isolation.py`
+exists and is treated as load-bearing, not a nice-to-have.
+
 **Every movement must land on a real Garmin exercise.** Garmin's taxonomy is a
 closed enum; a step it can't place arrives as a bare note — no exercise, no
 animation, no set logging. So the whole library is vendored
@@ -110,7 +124,9 @@ the mis-pushes behind them are in `docs/garmin_strength.md`.
 
 Postgres tables are history (`garmin_daily`, `garmin_activities`,
 `exercise_sets`, `notion_daily_log`, `suggestions`, `outcomes`,
-`research_corpus`). Live mutable state is in the `kv` store:
+`research_corpus`), every one of them `user_id`-scoped. Live mutable state is
+in the `kv` store, keyed by `(user_id, key)` — one physical table, isolated
+per account by the composite primary key, not by a string-prefix convention:
 
 | Key | What |
 |---|---|
@@ -128,9 +144,11 @@ guardrail sits above all of it and nothing can override it. See `docs/memory.md`
 ## Working here
 
 ```bash
-ruff check . && pytest          # 138 tests, all offline — no live APIs in CI
-uvicorn jim.app:app --reload    # chat at /chat?key=<CHAT_SECRET>
-python -m jim.jobs.nightly      # the nightly run, by hand
+ruff check . && pytest          # 224 tests, all offline — no live APIs in CI
+uvicorn jim.app:app --reload    # sign in/up at /login, chat at /chat
+python -m jim.jobs.nightly      # the nightly run, by hand — fans out over every
+                                 # nightly_enabled user; python scripts/backfill_users.py
+                                 # seeds the original athlete's account first
 python evals/run_evals.py
 ```
 

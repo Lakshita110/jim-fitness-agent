@@ -16,8 +16,10 @@ from jim.tools.garmin import build_strength_payload, classify_all
 @pytest.fixture
 def fake_kv(monkeypatch):
     store: dict = {}
-    monkeypatch.setattr(exercise_match, "kv_get", lambda key: store.get(key))
-    monkeypatch.setattr(exercise_match, "kv_set", lambda key, value: store.__setitem__(key, value))
+    monkeypatch.setattr(exercise_match, "kv_get", lambda user_id, key: store.get(key))
+    monkeypatch.setattr(
+        exercise_match, "kv_set", lambda user_id, key, value: store.__setitem__(key, value)
+    )
     return store
 
 
@@ -48,7 +50,7 @@ def test_a_confident_match_never_reaches_the_model(fake_kv, fake_llm):
     answers["Hip airplane"] = ("HIP_STABILITY", "HIP_CIRCLES")
 
     classified = classify_all(
-        ["Goblet squat", "Romanian deadlift", "Hip airplane"], semantic_resolver()
+        ["Goblet squat", "Romanian deadlift", "Hip airplane"], semantic_resolver(1)
     )
 
     assert calls == [["Hip airplane"]]  # the two it already knew cost nothing
@@ -62,7 +64,7 @@ def test_a_lukewarm_match_is_second_guessed(fake_kv, fake_llm):
     calls, answers = fake_llm
     answers["Tibialis raise"] = ("WARM_UP", "ANKLE_DORSIFLEXION_WITH_BAND")
 
-    classified = classify_all(["Tibialis raise"], semantic_resolver())
+    classified = classify_all(["Tibialis raise"], semantic_resolver(1))
 
     assert calls == [["Tibialis raise"]]
     assert classified["Tibialis raise"] == ("WARM_UP", "ANKLE_DORSIFLEXION_WITH_BAND")
@@ -70,7 +72,7 @@ def test_a_lukewarm_match_is_second_guessed(fake_kv, fake_llm):
 
 def test_the_lexical_guess_stands_if_the_model_has_nothing_better(fake_kv, fake_llm):
     calls, _ = fake_llm  # model declines to answer
-    classified = classify_all(["Monster walk"], semantic_resolver())
+    classified = classify_all(["Monster walk"], semantic_resolver(1))
     assert calls == [["Monster walk"]]
     assert classified["Monster walk"] == ("RUN", "WALK")
 
@@ -81,7 +83,7 @@ def test_a_whole_session_is_one_call_not_one_per_exercise(fake_kv, fake_llm):
     answers["Pallof press"] = ("CORE", "CABLE_CORE_PRESS")
 
     build_strength_payload(
-        session("Goblet squat", "Hip airplane", "Pallof press"), resolver=semantic_resolver()
+        session("Goblet squat", "Hip airplane", "Pallof press"), resolver=semantic_resolver(1)
     )
 
     assert len(calls) == 1
@@ -92,7 +94,7 @@ def test_a_resolved_name_is_paid_for_once(fake_kv, fake_llm):
     calls, answers = fake_llm
     answers["Hip airplane"] = ("HIP_STABILITY", "HIP_CIRCLES")
 
-    resolve = semantic_resolver()
+    resolve = semantic_resolver(1)
     assert resolve(["Hip airplane"]) == {"Hip airplane": ("HIP_STABILITY", "HIP_CIRCLES")}
     # the same movement, spelled differently, is already paid for
     assert resolve(["hip  AIRPLANE"]) == {"hip  AIRPLANE": ("HIP_STABILITY", "HIP_CIRCLES")}
@@ -104,7 +106,7 @@ def test_a_resolved_name_is_paid_for_once(fake_kv, fake_llm):
 def test_a_movement_garmin_lacks_is_not_asked_about_twice(fake_kv, fake_llm):
     calls, _ = fake_llm  # the model answers nothing: Garmin has no equivalent
 
-    resolve = semantic_resolver()
+    resolve = semantic_resolver(1)
     assert resolve(["Faff about a bit"]) == {}
     assert resolve(["Faff about a bit"]) == {}
 
@@ -113,7 +115,7 @@ def test_a_movement_garmin_lacks_is_not_asked_about_twice(fake_kv, fake_llm):
 
 
 def test_an_unresolved_step_still_pushes_as_a_description(fake_kv, fake_llm):
-    payload = build_strength_payload(session("Faff about a bit"), resolver=semantic_resolver())
+    payload = build_strength_payload(session("Faff about a bit"), resolver=semantic_resolver(1))
     (group,) = payload["workoutSegments"][0]["workoutSteps"]
     (step,) = group["workoutSteps"]
     assert "category" not in step

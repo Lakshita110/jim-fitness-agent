@@ -33,7 +33,7 @@ from jim.config import (
     MODEL_FAST,
     OPENROUTER_BASE_URL,
 )
-from jim.playbook import Playbook, load_playbook, use_existing_workout
+from jim.playbook import Playbook, _load_playbook_from_disk, use_existing_workout
 from jim.schemas import HistoryFeatures, StructuredSession
 
 log = logging.getLogger(__name__)
@@ -176,11 +176,14 @@ class CoachDeps:
     playbook_text: Callable[[], str]
     now: Callable[[], datetime]
     # Only consulted when a day carries a template ID, to tell an untouched
-    # template apart from an adapted one before pushing.
-    playbook: Callable[[], Playbook] = load_playbook
+    # template apart from an adapted one before pushing. Default is the plain
+    # disk loader (not the now-user-scoped load_playbook) purely so tests that
+    # construct CoachDeps directly without injecting `playbook` keep working
+    # with zero args — .live() always overrides this with the real per-user one.
+    playbook: Callable[[], Playbook] = _load_playbook_from_disk
 
     @classmethod
-    def live(cls) -> "CoachDeps":
+    def live(cls, user_id: int) -> "CoachDeps":
         from zoneinfo import ZoneInfo
 
         from jim.config import settings
@@ -202,15 +205,28 @@ class CoachDeps:
             # Each source degrades independently — a down integration (e.g. an
             # unshared Notion) must not blank Garmin, features, or readiness.
             sources = {
-                "garmin": lambda: garmin.get_garmin_today(today),
-                "notion": lambda: notion.get_notion_logs(today),
-                "features": lambda: query_history(today),
-                "readiness": lambda: readiness_read(today),
+                "garmin": lambda: garmin.get_garmin_today(user_id, today),
+                "notion": lambda: notion.get_notion_logs(user_id, today),
+                "features": lambda: query_history(user_id, today),
+                "readiness": lambda: readiness_read(user_id, today),
+                # dates serialized to ISO here — the kv store and the prompt's
+                # json.dumps(state) can't carry a raw date object.
+                "calendar": lambda: [
+                    {**item, "date": item["date"].isoformat()}
+                    for item in garmin.get_scheduled_workouts(
+                        user_id, today, today + timedelta(days=DRAFT_MAX_DAYS - 1)
+                    )
+                ],
             }
             state: dict = {}
             for name, fetch in sources.items():
                 try:
-                    state[name] = fetch().model_dump(mode="json")
+                    result = fetch()
+                    # every other source is a pydantic model; calendar is a plain
+                    # list already shaped for storage/JSON.
+                    state[name] = result if isinstance(result, list) else result.model_dump(
+                        mode="json"
+                    )
                 except Exception:
                     log.warning("state source %r unavailable this turn", name, exc_info=True)
             return state
@@ -248,20 +264,21 @@ class CoachDeps:
             return "\n".join(f"[{h.source}] {h.title}: {h.snippet}" for h in hits) or "(no hits)"
 
         return cls(
-            kv_get=kv_get,
-            kv_set=kv_set,
+            kv_get=lambda key: kv_get(user_id, key),
+            kv_set=lambda key, value: kv_set(user_id, key, value),
             fetch_state=fetch_state,
             llm=llm,
             lookup_tools={
-                "exercise_history": exercise_history,
-                "workout_history": workout_history,
+                "exercise_history": lambda exercise: exercise_history(user_id, exercise),
+                "workout_history": lambda days=14: workout_history(user_id, days),
                 "research": research,
             },
-            schedule_workout=garmin.schedule_workout,
-            clear_schedule=garmin.clear_schedule,
-            create_garmin_workout=garmin.create_garmin_workout,
-            record_suggestion=memory.record_suggestion,
-            playbook_text=lambda: load_playbook().to_prompt(),
+            schedule_workout=lambda wid, on: garmin.schedule_workout(user_id, wid, on),
+            clear_schedule=lambda on: garmin.clear_schedule(user_id, on),
+            create_garmin_workout=lambda s: garmin.create_garmin_workout(user_id, s),
+            record_suggestion=lambda *a, **kw: memory.record_suggestion(user_id, *a, **kw),
+            playbook_text=lambda: load_playbook(user_id).to_prompt(),
+            playbook=lambda: load_playbook(user_id),
             now=now,
         )
 
@@ -285,6 +302,19 @@ def _cached_state(deps: CoachDeps) -> dict:
     return state
 
 
+def _maybe_sync_calendar(deps: CoachDeps, state: dict) -> None:
+    """Run the calendar->draft sync if this state snapshot carries one. Cheap
+    no-op most turns: `state["calendar"]` only refreshes hourly (it rides the
+    same cache as everything else), and the sync itself is a no-op once every
+    calendar day is already covered by the draft."""
+    calendar = state.get("calendar")
+    if calendar:
+        try:
+            _sync_calendar_into_draft(deps, calendar)
+        except Exception:
+            log.exception("calendar sync failed; draft left as-is")
+
+
 def _features(state: dict, today: date) -> HistoryFeatures:
     raw = state.get("features")
     if raw:
@@ -300,6 +330,65 @@ def _parse_draft(raw: list, today: date) -> list[StructuredSession]:
         except Exception:
             log.warning("dropping unparseable draft day: %r", item)
     return sessions
+
+
+# A template's `sport` field (as written in the playbook YAML) to the session
+# `kind` the model/chat use — not the same vocabulary as Garmin's SPORT_TYPES
+# keys, though they overlap. Anything unrecognized falls back to "strength".
+_SPORT_TO_KIND: dict[str, str] = {
+    "strength": "strength", "strength_training": "strength",
+    "mobility": "mobility", "conditioning": "conditioning",
+}
+
+
+def _session_from_calendar_item(item: dict, playbook: Playbook) -> StructuredSession:
+    """A calendar item already on the real Garmin schedule, as a draft day.
+
+    Always a template pick (steps=[]) — the workout exists on Garmin already,
+    so scheduling it by ID is the only correct move (see
+    playbook.use_existing_workout). The calendar's own title wins over the
+    template's label even when a template matches, since the athlete may have
+    hand-edited the title directly on Garmin (e.g. "Full Body A (modified)")."""
+    wt = playbook.by_workout_id(item["workout_id"])
+    kind = _SPORT_TO_KIND.get(wt.sport, "strength") if wt else "strength"
+    return StructuredSession(
+        for_date=item["date"],
+        kind=kind,
+        title=item["title"],
+        template_key=wt.key if wt else None,
+        garmin_workout_id=item["workout_id"],
+        steps=[],
+        est_duration_min=0,
+        rationale_summary="Already scheduled on your Garmin calendar.",
+    )
+
+
+def _sync_calendar_into_draft(deps: CoachDeps, calendar_items: list[dict]) -> None:
+    """Fill empty draft days from the real Garmin calendar — never touches a day
+    Jim or the athlete already planned. "Drafts merge, they don't replace" and
+    "the athlete's plan wins" apply here too: a calendar read is the lowest-
+    priority source, so it only ever fills gaps, never overwrites."""
+    today = deps.now().date()
+    existing = _parse_draft(deps.kv_get("draft") or [], today)
+    have = {s.for_date.isoformat() for s in existing}
+    playbook = deps.playbook()
+
+    added = [
+        _session_from_calendar_item(item, playbook)
+        for item in calendar_items
+        if str(item["date"]) not in have
+    ]
+    if not added:
+        return
+
+    merged = existing + added
+    deps.kv_set("draft", [s.model_dump(mode="json") for s in merged])
+
+    pushed = deps.kv_get("pushed") or {}
+    for s in added:
+        fd = s.for_date.isoformat()
+        pushed[fd] = {"title": s.title, "sig": _sig(s), "pushed_at": deps.now().isoformat()}
+    deps.kv_set("pushed", pushed)
 
 
 def format_duration(secs: int | None) -> str:
@@ -478,14 +567,15 @@ def _run_model(deps: CoachDeps, system: str, history: list[dict]) -> dict:
     return _loads_json(resp.get("content") or "")
 
 
-def converse(text: str, deps: CoachDeps | None = None,
+def converse(text: str, user_id: int, deps: CoachDeps | None = None,
              scope_date: str | None = None) -> dict:
     """One chat turn. Returns {reply, draft, push_status} and persists
     history/draft/goals. `scope_date` (an ISO date) narrows the edit to a single
     day — the model is told to return only that day, merged onto the plan."""
-    deps = deps or CoachDeps.live()
+    deps = deps or CoachDeps.live(user_id)
     today = deps.now().date()
     state = _cached_state(deps)
+    _maybe_sync_calendar(deps, state)
     history: list[dict] = deps.kv_get("chat_history") or []
     history = history[-HISTORY_LIMIT:] + [{"role": "user", "content": text}]
 
@@ -557,11 +647,11 @@ def converse(text: str, deps: CoachDeps | None = None,
             "push_status": _push_status(deps, saved), "today": today.isoformat()}
 
 
-def approve(deps: CoachDeps | None = None) -> str:
+def approve(user_id: int, deps: CoachDeps | None = None) -> str:
     """Push every day in the draft to Garmin and record suggestions. The draft
     is kept (each day now shows as on-watch) so it stays visible and editable;
     already-pushed days are re-scheduled cleanly (unschedule first)."""
-    deps = deps or CoachDeps.live()
+    deps = deps or CoachDeps.live(user_id)
     draft = _parse_draft(deps.kv_get("draft") or [], deps.now().date())
     if not draft:
         return "Nothing to push — the draft is empty."
@@ -580,11 +670,11 @@ def approve(deps: CoachDeps | None = None) -> str:
     return summary
 
 
-def push_day(for_date: str, deps: CoachDeps | None = None) -> dict:
+def push_day(for_date: str, user_id: int, deps: CoachDeps | None = None) -> dict:
     """Push (or update) a single draft day to Garmin. Returns
     {summary, draft, push_status}. Re-pushing an already-pushed day unschedules
     the prior one first so the watch never ends up with a duplicate."""
-    deps = deps or CoachDeps.live()
+    deps = deps or CoachDeps.live(user_id)
     today = deps.now().date()
     draft = _parse_draft(deps.kv_get("draft") or [], today)
     draft_json = [s.model_dump(mode="json") for s in draft]
@@ -618,20 +708,21 @@ def push_day(for_date: str, deps: CoachDeps | None = None) -> dict:
             "push_status": _push_status(deps, draft)}
 
 
-def clear(deps: CoachDeps | None = None) -> None:
+def clear(user_id: int, deps: CoachDeps | None = None) -> None:
     """Start a fresh conversation (draft and goals survive)."""
-    deps = deps or CoachDeps.live()
+    deps = deps or CoachDeps.live(user_id)
     deps.kv_set("chat_history", [])
 
 
-def current_state(deps: CoachDeps | None = None) -> dict:
+def current_state(user_id: int, deps: CoachDeps | None = None) -> dict:
     """What the UI shows on load: recent messages + working draft + goals,
     plus the readiness verdict and latest pain read for the stat cards."""
-    deps = deps or CoachDeps.live()
+    deps = deps or CoachDeps.live(user_id)
     readiness = None
     pain = None
     try:  # a state hiccup must never break the page load
         state = _cached_state(deps)
+        _maybe_sync_calendar(deps, state)
         readiness = state.get("readiness")
         notion = state.get("notion") or {}
         if (

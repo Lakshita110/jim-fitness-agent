@@ -124,9 +124,9 @@ def test_overrides_beat_the_nearest_name_when_it_is_the_wrong_movement():
 def test_every_playbook_exercise_reaches_a_garmin_exercise():
     """The bug this guards: an unmatched movement lands on the watch as a bare
     note — no exercise, no animation, no set logging."""
-    from jim.playbook import load_playbook
+    from jim.playbook import _load_playbook_from_disk
 
-    playbook = load_playbook()
+    playbook = _load_playbook_from_disk()
     templates = list(playbook.workouts.values()) + list(playbook.pt_routines.values())
     names = {
         exercise.name
@@ -155,10 +155,10 @@ def test_every_mapping_is_a_pair_garmin_will_accept():
 
 
 def test_build_template_payload_from_playbook_home_pt():
-    from jim.playbook import load_playbook
+    from jim.playbook import _load_playbook_from_disk
     from jim.tools.garmin import build_template_payload
 
-    home = load_playbook().pt_routines["pt_home"]
+    home = _load_playbook_from_disk().pt_routines["pt_home"]
     payload = build_template_payload(home)
     assert payload["sportType"]["sportTypeKey"] == "mobility"
     steps = payload["workoutSegments"][0]["workoutSteps"]

@@ -117,11 +117,15 @@ def llm_match(names: Iterable[str], model: str = MODEL_FAST) -> dict[str, Pair]:
     return matched
 
 
-def semantic_resolver(model: str = MODEL_FAST) -> Resolver:
-    """A resolver that reads the kv cache first and asks the model for the rest."""
+def semantic_resolver(user_id: int, model: str = MODEL_FAST) -> Resolver:
+    """A resolver that reads the kv cache first and asks the model for the rest.
+
+    The cache is per-user (kv's composite PK isolates it) — a deliberate
+    consequence, not a bug: each user re-learns the same common mappings once
+    rather than sharing a cache across accounts."""
 
     def resolve(names: list[str]) -> dict[str, Pair]:
-        cache: dict = kv_get(CACHE_KEY) or {}
+        cache: dict = kv_get(user_id, CACHE_KEY) or {}
         resolved: dict[str, Pair] = {}
         unknown: list[str] = []
 
@@ -141,7 +145,7 @@ def semantic_resolver(model: str = MODEL_FAST) -> Resolver:
                 cache[_normalize(name)] = list(pair) if pair else None
                 if pair:
                     resolved[name] = pair
-            kv_set(CACHE_KEY, cache)
+            kv_set(user_id, CACHE_KEY, cache)
             log.info("exercise match: resolved %d/%d unmatched movements via %s",
                      len(fresh), len(unknown), model)
 

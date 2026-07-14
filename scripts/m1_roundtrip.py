@@ -12,6 +12,7 @@ import json
 import sys
 from datetime import date, timedelta
 
+from jim.auth import first_user_id
 from jim.schemas import ExerciseStep, StructuredSession
 from jim.tools.garmin import build_strength_payload, create_garmin_workout, schedule_workout
 
@@ -30,12 +31,15 @@ HARDCODED = StructuredSession(
 
 
 def main() -> None:
+    user_id = first_user_id()
+    if user_id is None:
+        raise SystemExit("no users in the database — run scripts/backfill_users.py first")
     on = date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else HARDCODED.for_date
     print("payload we are sending:")
     print(json.dumps(build_strength_payload(HARDCODED), indent=2))
-    ref = create_garmin_workout(HARDCODED)
+    ref = create_garmin_workout(user_id, HARDCODED)
     print(f"created workout {ref.workout_id}; scheduling for {on}")
-    schedule_workout(ref.workout_id, on)
+    schedule_workout(user_id, ref.workout_id, on)
     print("done — sync the watch and confirm, then update docs/garmin_strength.md")
 
 

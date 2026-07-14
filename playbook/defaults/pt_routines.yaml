@@ -1,0 +1,4 @@
+# Generic starter seed for a new signup — see base_workouts.yaml's header for why
+# this is empty rather than the committed athlete's real PT content.
+
+routines: {}

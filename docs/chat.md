@@ -6,18 +6,28 @@ until you hit Push to Garmin**.
 
 ## Setup
 
-1. Set `CHAT_SECRET` in the environment (long random string; chat is disabled
-   without it). `OPENROUTER_API_KEY` must also be set — the conversation runs
-   on the cheap tier (`MODEL_FAST`).
-2. Open `https://<your-app>.vercel.app/chat?key=<CHAT_SECRET>`. A valid key
-   sets a session cookie (~13 months), so later visits need no key in the URL.
-3. On your phone: **Add to Home Screen** — it opens full-screen like an app,
+1. Set `SESSION_SECRET` and `CREDENTIAL_ENCRYPTION_KEY` in the environment
+   (both long random strings). `OPENROUTER_API_KEY` must also be set — the
+   conversation runs on the cheap tier (`MODEL_FAST`).
+2. Open `https://<your-app>.vercel.app/login` and sign in (or create an
+   account — see `scripts/backfill_users.py` for creating the original
+   athlete's account from existing env-var credentials). A successful
+   login/signup sets a session cookie (~13 months), so later visits go
+   straight to `/chat` with no key or password in the URL.
+3. Not connected to Garmin yet? Open **Settings → Garmin** (`/settings/garmin`)
+   and enter your Garmin email/password (MFA-code form if your account needs
+   it). Jim stores the password encrypted at rest — Garmin has no OAuth, so
+   there's no way around holding it — and re-authenticates silently with it if
+   a cached session token expires.
+4. On your phone: **Add to Home Screen** — it opens full-screen like an app,
    authenticated by that cookie.
 
 ## How it behaves
 
-- **It's one thread** (you're the only user). "clear chat" starts fresh —
-  the draft and your goals survive a clear.
+- **It's one thread per account** — your chat history, draft, goals, and
+  playbook are yours alone, isolated from any other athlete on the same
+  deployment. "clear chat" starts fresh — the draft and your goals survive a
+  clear.
 - **The page shows** three stat cards (readiness verdict, next session, latest
   pain read) and a persistent Plan panel — right column on desktop, bottom sheet
   on mobile. Replies render light markdown, so a weekly schedule comes back as a
@@ -39,6 +49,12 @@ until you hit Push to Garmin**.
 - **Long-term goals**: say "my long-term goal is X" and Jim rewrites your
   goals block — stored durably, nothing scheduled. Goals are read by every
   chat turn *and* every nightly run, so they shape plans continuously.
+- **Playbook panel**: a "Playbook" link next to the plan opens a JSON textarea
+  (`GET`/`POST /api/playbook`) — your base workouts, PT routines, rotation, and
+  standing directives, editable directly. Saves are all-or-nothing: a bad edit
+  gets a 400 with the validation error, not a half-applied playbook. New
+  accounts start from a generic empty seed, not anyone else's knee-specific
+  content.
 - **Jim looks things up** (bounded to 4 lookup rounds per turn): your
   per-exercise performance history from the watch (actual sets × reps @ kg —
   checked before any weight is prescribed, progressed conservatively), your

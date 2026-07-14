@@ -1,6 +1,12 @@
 from datetime import date
 
-from jim.playbook import Playbook, load_playbook, template_prescription, use_existing_workout
+from jim.playbook import (
+    Playbook,
+    _load_default_playbook,
+    _load_playbook_from_disk,
+    template_prescription,
+    use_existing_workout,
+)
 from jim.schemas import ExerciseStep, StructuredSession
 
 
@@ -14,14 +20,14 @@ def session(**overrides) -> StructuredSession:
 
 
 def test_loads_real_playbook_files():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     assert pb.rotation == ["full_body_a", "full_body_b", "full_body_c"]
     assert set(pb.workouts) == {"full_body_a", "full_body_b", "full_body_c"}
     assert set(pb.pt_routines) == {"pt_home", "pt_gym"}
 
 
 def test_base_workouts_carry_garmin_ids():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     assert pb.workouts["full_body_a"].garmin_workout_id == "1414012813"
     assert pb.workouts["full_body_b"].garmin_workout_id == "1414015802"
     assert pb.workouts["full_body_c"].garmin_workout_id == "1414019198"
@@ -31,7 +37,7 @@ def test_base_workouts_carry_garmin_ids():
 
 
 def test_rotation_cycles():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     assert pb.next_in_rotation(None) == "full_body_a"
     assert pb.next_in_rotation("full_body_a") == "full_body_b"
     assert pb.next_in_rotation("full_body_c") == "full_body_a"  # wraps
@@ -39,7 +45,7 @@ def test_rotation_cycles():
 
 
 def test_priority_and_flare_tags_preserved():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     home = pb.pt_routines["pt_home"]
     all_ex = [e for b in home.blocks for e in b.exercises]
     eversion = next(e for e in all_ex if "eversion" in e.name.lower())
@@ -49,7 +55,7 @@ def test_priority_and_flare_tags_preserved():
 
 
 def test_to_prompt_includes_ids_directives_and_doses():
-    text = load_playbook().to_prompt()
+    text = _load_playbook_from_disk().to_prompt()
     assert "garmin_workout_id=1414012813" in text
     assert "Full Body A" in text
     assert "Standing directives" in text
@@ -62,11 +68,22 @@ def test_empty_playbook_prompt_is_safe():
     assert Playbook().to_prompt().startswith("## Base strength rotation")
 
 
+def test_default_playbook_seed_is_generic_not_the_real_athletes_content():
+    default = _load_default_playbook()
+    assert default.rotation == []
+    assert default.workouts == {}
+    assert default.pt_routines == {}
+    assert "Settings" in default.directives and "Playbook" in default.directives
+    real = _load_playbook_from_disk()
+    assert default.directives != real.directives
+    assert default.rotation != real.rotation
+
+
 # --- template pick vs. adaptation (what actually reaches the watch) -----------
 
 
 def test_template_with_no_steps_schedules_the_existing_workout():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     s = session(garmin_workout_id="1414012813", template_key="full_body_a", steps=[])
     assert use_existing_workout(s, pb) is True
 
@@ -74,7 +91,7 @@ def test_template_with_no_steps_schedules_the_existing_workout():
 def test_adapted_day_is_rebuilt_even_when_it_echoes_the_template_id():
     """The bug: the model returns custom steps AND the template's Garmin ID, and
     the athlete's edits were silently dropped in favour of stock Full Body A."""
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     s = session(
         garmin_workout_id="1414012813", template_key="full_body_a",
         steps=[
@@ -86,7 +103,7 @@ def test_adapted_day_is_rebuilt_even_when_it_echoes_the_template_id():
 
 
 def test_prescribed_weight_counts_as_an_adaptation():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     unchanged = template_prescription(pb.workouts["full_body_a"])
     steps = [
         ExerciseStep(exercise=name, sets=sets, reps=reps, duration_sec=secs)
@@ -100,7 +117,7 @@ def test_prescribed_weight_counts_as_an_adaptation():
 def test_verbatim_echo_of_the_template_still_schedules_by_id():
     """A model that restates the template instead of leaving steps empty must not
     cost the athlete the weights loaded on the Garmin workout."""
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     steps = [
         ExerciseStep(exercise=name, sets=sets, reps=reps, duration_sec=secs)
         for name, sets, reps, secs in template_prescription(pb.workouts["full_body_a"])
@@ -110,6 +127,6 @@ def test_verbatim_echo_of_the_template_still_schedules_by_id():
 
 
 def test_custom_day_without_a_template_id_is_always_built():
-    pb = load_playbook()
+    pb = _load_playbook_from_disk()
     s = session(steps=[ExerciseStep(exercise="Bench press", sets=3, reps=8)])
     assert use_existing_workout(s, pb) is False

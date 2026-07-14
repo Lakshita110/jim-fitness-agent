@@ -17,7 +17,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from jim.config import settings
 from jim.schemas import ActivitySummary, GarminToday, StructuredSession, WorkoutRef
 
 if TYPE_CHECKING:
@@ -26,7 +25,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_client: Any = None
+_clients: dict[int, Any] = {}
 
 
 TOKEN_STORE = "~/.garminconnect"
@@ -35,41 +34,44 @@ TOKEN_STORE = "~/.garminconnect"
 MIN_TOKEN_BLOB_CHARS = 512
 
 
-def client() -> Any:
-    """Lazily authenticated Garmin client (cached tokens, re-login on expiry).
+def client(user_id: int) -> Any:
+    """Lazily authenticated Garmin client for `user_id` (cached per process,
+    re-login on expiry via re-authentication).
 
-    Two token sources, in order:
-    1. GARMIN_TOKENS — a session blob (scripts/garmin_login.py --export). This is
-       what deployed containers use: their filesystem is ephemeral and a fresh
-       SSO login would block on an MFA prompt with no stdin to answer it.
-       `login()` treats a string >512 chars as token data rather than a path.
-    2. TOKEN_STORE (~/.garminconnect) — the local dev path; a full SSO login
-       happens on first use (MFA prompt on stdin) and caches tokens there.
+    Two token sources, in order, read from this user's `user_credentials` row:
+    1. garmin_tokens — a session blob (scripts/garmin_login.py --export, or the
+       Settings -> Garmin connect flow). This is what deployed containers use:
+       their filesystem is ephemeral and a fresh SSO login would block on an
+       MFA prompt with no stdin to answer it. `login()` treats a string >512
+       chars as token data rather than a path.
+    2. garmin_password — fallback re-auth when there's no usable token blob.
     """
-    global _client
-    if _client is None:
+    if user_id not in _clients:
         from garminconnect import Garmin
 
-        cfg = settings()
-        garmin = Garmin(cfg.garmin_email, cfg.garmin_password)
-        tokens = (cfg.garmin_tokens or "").strip()
+        from jim.db import get_user_credentials
+
+        creds = get_user_credentials(user_id)
+        if not creds or not (creds.get("garmin_tokens") or creds.get("garmin_password")):
+            raise RuntimeError(f"user {user_id} has not connected Garmin")
+        garmin = Garmin(creds.get("garmin_email") or "", creds.get("garmin_password") or "")
+        tokens = (creds.get("garmin_tokens") or "").strip()
         if tokens:
             # login() only treats the string as token data above 512 chars —
             # below that it silently falls back to reading it as a PATH, which
             # fails in a confusing way. Catch a truncated/mangled blob here.
             if len(tokens) <= MIN_TOKEN_BLOB_CHARS:
                 raise RuntimeError(
-                    f"GARMIN_TOKENS is only {len(tokens)} chars; a real session blob is"
-                    f" >{MIN_TOKEN_BLOB_CHARS}. It was likely truncated when pasted."
-                    " Re-run: python scripts/garmin_login.py --export"
+                    f"user {user_id}'s garmin_tokens is only {len(tokens)} chars; a real"
+                    f" session blob is >{MIN_TOKEN_BLOB_CHARS}. It was likely truncated."
                 )
-            log.info("garmin: authenticating from GARMIN_TOKENS blob")
+            log.info("garmin: authenticating user %s from stored tokens blob", user_id)
             garmin.login(tokens)
         else:
-            log.info("garmin: authenticating from token store %s", TOKEN_STORE)
-            garmin.login(TOKEN_STORE)
-        _client = garmin
-    return _client
+            log.info("garmin: authenticating user %s from stored password", user_id)
+            garmin.login()
+        _clients[user_id] = garmin
+    return _clients[user_id]
 
 
 def body_battery_recovered(stats: dict) -> int | None:
@@ -88,9 +90,9 @@ def body_battery_recovered(stats: dict) -> int | None:
     return None
 
 
-def get_garmin_today(day: date) -> GarminToday:
+def get_garmin_today(user_id: int, day: date) -> GarminToday:
     """Activities + recovery for `day`. Computation done here; returns summary."""
-    api = client()
+    api = client(user_id)
     iso = day.isoformat()
 
     activities = []
@@ -462,9 +464,9 @@ def parse_exercise_sets(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def get_exercise_sets(activity_id: str) -> list[dict[str, Any]]:
+def get_exercise_sets(user_id: int, activity_id: str) -> list[dict[str, Any]]:
     """ACTIVE sets of a strength activity as normalized rows."""
-    api = client()
+    api = client(user_id)
     return parse_exercise_sets(api.get_activity_exercise_sets(activity_id) or {})
 
 
@@ -532,7 +534,7 @@ def build_template_payload(
     return _wrap_payload(template.label, template.sport, steps)
 
 
-def create_garmin_workout(session: StructuredSession) -> WorkoutRef:
+def create_garmin_workout(user_id: int, session: StructuredSession) -> WorkoutRef:
     """Create a structured workout via the workout API (JSON path, NOT FIT upload).
 
     This is the only path that reaches for the semantic fallback: a movement the
@@ -540,27 +542,62 @@ def create_garmin_workout(session: StructuredSession) -> WorkoutRef:
     and here we're about to push it for real."""
     from jim.tools.exercise_match import semantic_resolver  # deferred: needs db + LLM
 
-    api = client()
-    payload = build_strength_payload(session, resolver=semantic_resolver())
+    api = client(user_id)
+    payload = build_strength_payload(session, resolver=semantic_resolver(user_id))
     resp = api.upload_workout(payload)
     workout_id = str(resp.get("workoutId", ""))
     log.info("created garmin workout %s (%s)", workout_id, session.title)
     return WorkoutRef(workout_id=workout_id)
 
 
-def schedule_workout(workout_id: str, on: date) -> None:
-    api = client()
+def schedule_workout(user_id: int, workout_id: str, on: date) -> None:
+    api = client(user_id)
     api.schedule_workout(workout_id, on.isoformat())
     log.info("scheduled workout %s for %s", workout_id, on)
 
 
-def clear_schedule(on: date) -> None:
+def get_scheduled_workouts(user_id: int, start: date, end: date) -> list[dict]:
+    """Workouts already on the real Garmin calendar in [start, end], for the
+    draft-sync (a user who scheduled directly in Garmin Connect, or before ever
+    using Jim, shouldn't see an empty plan just because Jim didn't propose it).
+
+    Each item: {"date": date, "workout_id": str, "title": str}. `get_scheduled_
+    workouts` is a per-month API, so a range spanning a month boundary means one
+    call per distinct (year, month) touched, merged and filtered back to the
+    exact range."""
+    api = client(user_id)
+    months: list[tuple[int, int]] = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        months.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+    out: list[dict] = []
+    for year, month in months:
+        calendar = api.get_scheduled_workouts(year, month) or {}
+        for item in calendar.get("calendarItems", []):
+            if item.get("itemType") != "workout":
+                continue
+            iso = item.get("date")
+            if not iso:
+                continue
+            day = date.fromisoformat(iso)
+            if not (start <= day <= end):
+                continue
+            workout_id = item.get("workoutId")
+            if workout_id is None:
+                continue  # not every calendar item carries one; skip rather than guess
+            out.append({"date": day, "workout_id": str(workout_id), "title": item.get("title", "")})
+    return out
+
+
+def clear_schedule(user_id: int, on: date) -> None:
     """Unschedule every planned (not completed) workout on `on`.
 
     Used by the morning re-plan before pushing a replacement, so a stale
     nightly schedule doesn't sit next to the new one. Only touches calendar
     items of type 'workout' — recorded activities are untouched."""
-    api = client()
+    api = client(user_id)
     calendar = api.get_scheduled_workouts(on.year, on.month) or {}
     for item in calendar.get("calendarItems", []):
         if item.get("itemType") == "workout" and item.get("date") == on.isoformat():

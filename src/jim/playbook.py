@@ -10,6 +10,7 @@ the next run — no code change, no DB write. The loader validates structure and
 renders a compact text block for the compose prompt; `garmin_workout_id` lets
 the loop schedule an existing Garmin workout directly instead of rebuilding it."""
 
+import json
 import logging
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from jim.schemas import StructuredSession
 log = logging.getLogger(__name__)
 
 PLAYBOOK_DIR = Path(__file__).resolve().parent.parent.parent / "playbook"
+DEFAULT_PLAYBOOK_DIR = PLAYBOOK_DIR / "defaults"
 
 
 class Exercise(BaseModel):
@@ -168,7 +170,10 @@ def _render_template(wt: WorkoutTemplate) -> str:
     return "\n".join(lines)
 
 
-def load_playbook(directory: Path = PLAYBOOK_DIR) -> Playbook:
+def _load_playbook_from_disk(directory: Path = PLAYBOOK_DIR) -> Playbook:
+    """The original disk-reading loader. Kept as the seed source for the
+    one-off athlete backfill (scripts/backfill_users.py) — per-user storage
+    is now Postgres (`load_playbook(user_id)` below)."""
     # Always utf-8: the playbook is full of em dashes and degree signs, and
     # read_text() defaults to the locale encoding (cp1252 on Windows), which
     # mangles them into the prompt, the exercise match, and the watch.
@@ -191,6 +196,56 @@ def load_playbook(directory: Path = PLAYBOOK_DIR) -> Playbook:
         pt_routines=pt_routines,
         directives=_strip_html_comments(directives),
     )
+
+
+def _load_default_playbook() -> Playbook:
+    """The generic seed for a brand-new signup (playbook/defaults/) — not the
+    committed athlete YAML, which is this one athlete's own knee-specific
+    content. Used by auth.create_user()."""
+    return _load_playbook_from_disk(DEFAULT_PLAYBOOK_DIR)
+
+
+def load_playbook(user_id: int) -> Playbook:
+    """Per-user playbook, stored in Postgres (`playbooks` table, one row per
+    user, JSONB columns — see soft-baking-kettle plan §5)."""
+    from jim.db import connect
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT rotation, workouts, pt_routines, directives FROM playbooks"
+            " WHERE user_id = %s",
+            (user_id,),
+        ).fetchone()
+    if row is None:
+        return Playbook()  # safety net; a row should exist post-signup
+    workouts = {k: WorkoutTemplate(key=k, **v) for k, v in row["workouts"].items()}
+    pt_routines = {k: WorkoutTemplate(key=k, **v) for k, v in row["pt_routines"].items()}
+    return Playbook(
+        rotation=row["rotation"], workouts=workouts, pt_routines=pt_routines,
+        directives=row["directives"],
+    )
+
+
+def save_playbook(user_id: int, pb: Playbook) -> None:
+    """Upsert `pb` for `user_id`. Phase 4's /api/playbook POST route calls this."""
+    from jim.db import connect
+
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO playbooks (user_id, rotation, workouts, pt_routines, directives,"
+            " updated_ts) VALUES (%s, %s, %s, %s, %s, now())"
+            " ON CONFLICT (user_id) DO UPDATE SET rotation = EXCLUDED.rotation,"
+            " workouts = EXCLUDED.workouts, pt_routines = EXCLUDED.pt_routines,"
+            " directives = EXCLUDED.directives, updated_ts = now()",
+            (
+                user_id,
+                json.dumps(pb.rotation),
+                json.dumps({k: v.model_dump(mode="json") for k, v in pb.workouts.items()}),
+                json.dumps({k: v.model_dump(mode="json") for k, v in pb.pt_routines.items()}),
+                pb.directives,
+            ),
+        )
+        conn.commit()
 
 
 def _strip_html_comments(text: str) -> str:
