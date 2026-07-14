@@ -16,6 +16,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
+from jim.schemas import StructuredSession
+
 log = logging.getLogger(__name__)
 
 PLAYBOOK_DIR = Path(__file__).resolve().parent.parent.parent / "playbook"
@@ -55,6 +57,14 @@ class Playbook(BaseModel):
     def template(self, key: str) -> WorkoutTemplate | None:
         return self.workouts.get(key) or self.pt_routines.get(key)
 
+    def by_workout_id(self, workout_id: str) -> WorkoutTemplate | None:
+        """Reverse lookup — the model reliably echoes the Garmin ID even when it
+        forgets (or invents) the template_key."""
+        for wt in (*self.workouts.values(), *self.pt_routines.values()):
+            if wt.garmin_workout_id == workout_id:
+                return wt
+        return None
+
     def next_in_rotation(self, last_key: str | None) -> str | None:
         """The letter after `last_key` in the A/B/C cycle (wraps)."""
         if not self.rotation:
@@ -79,6 +89,57 @@ class Playbook(BaseModel):
         if self.directives:
             lines.append("\n## Standing directives (obey these)\n" + self.directives)
         return "\n".join(lines)
+
+
+def _key(name: str) -> str:
+    return " ".join(name.lower().split())
+
+
+def template_prescription(wt: WorkoutTemplate) -> list[tuple[str, int, int | None, int | None]]:
+    """The template's own steps as (name, sets, reps, seconds).
+
+    Block-level `sets` are the rounds for every exercise in that block, so they
+    flatten onto each exercise — that's the shape a model produces when it
+    restates a template instead of adapting it."""
+    rows = [(_key(ex.name), ex.sets or 1, ex.reps, ex.time_sec) for ex in wt.warmup]
+    for block in wt.blocks:
+        rounds = block.sets or 1
+        rows += [
+            (_key(ex.name), ex.sets or rounds, ex.reps, ex.time_sec)
+            for ex in block.exercises
+        ]
+    return rows
+
+
+def use_existing_workout(session: StructuredSession, playbook: "Playbook") -> bool:
+    """Whether pushing this day should schedule the EXISTING Garmin workout by ID
+    instead of building a new one from `session.steps`.
+
+    Only when the day really is the template: it carries no steps (the contract
+    the model is given), or its steps merely restate the template's own
+    prescription. The moment they diverge — a swap, a dropped move, a prescribed
+    weight — the day is an ADAPTATION and must be built fresh.
+
+    This is enforced here rather than trusted to the prompt because the model
+    routinely echoes a template's garmin_workout_id alongside its edits. Reading
+    the ID first meant those edits were silently discarded and stock Full Body A
+    landed on the watch instead."""
+    if not session.garmin_workout_id:
+        return False
+    if not session.steps:
+        return True
+
+    wt = playbook.template(session.template_key or "") or playbook.by_workout_id(
+        session.garmin_workout_id
+    )
+    if wt is None:
+        return False  # unknown template but explicit steps — trust the steps
+    if any(step.weight_kg is not None for step in session.steps):
+        return False  # templates carry no loads, so a prescribed weight is an edit
+    prescribed = [
+        (_key(s.exercise), s.sets, s.reps, s.duration_sec) for s in session.steps
+    ]
+    return prescribed == template_prescription(wt)
 
 
 def _dose(ex: Exercise) -> str:

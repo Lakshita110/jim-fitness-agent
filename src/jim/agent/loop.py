@@ -23,6 +23,7 @@ from jim.config import (
     MODEL_QUALITY,
     RESEARCH_ENABLED,
 )
+from jim.playbook import use_existing_workout
 from jim.schemas import ResearchHit, StructuredSession
 
 if TYPE_CHECKING:
@@ -171,9 +172,11 @@ def run_agent(
 
     # Unattended auto-push stays off until the M5 eval suite gates it green.
     if AUTO_PUSH and session.kind != "rest" and not report.fell_back:
-        if session.garmin_workout_id:
+        if use_existing_workout(session, playbook):
             # Base template selected unchanged: schedule the existing Garmin
-            # workout by ID (keeps loaded weights) — no rebuild.
+            # workout by ID (keeps loaded weights) — no rebuild. A session that
+            # ADAPTED the template is built from its steps even though the model
+            # tends to echo the template's ID alongside the edits.
             call(tools.schedule_workout, session.garmin_workout_id, target)
         else:
             ref = call(tools.create_garmin_workout, session)

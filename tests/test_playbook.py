@@ -1,4 +1,16 @@
-from jim.playbook import Playbook, load_playbook
+from datetime import date
+
+from jim.playbook import Playbook, load_playbook, template_prescription, use_existing_workout
+from jim.schemas import ExerciseStep, StructuredSession
+
+
+def session(**overrides) -> StructuredSession:
+    base = dict(
+        for_date=date(2026, 7, 9), kind="strength", title="Full Body A",
+        est_duration_min=60,
+    )
+    base.update(overrides)
+    return StructuredSession(**base)
 
 
 def test_loads_real_playbook_files():
@@ -48,3 +60,56 @@ def test_to_prompt_includes_ids_directives_and_doses():
 
 def test_empty_playbook_prompt_is_safe():
     assert Playbook().to_prompt().startswith("## Base strength rotation")
+
+
+# --- template pick vs. adaptation (what actually reaches the watch) -----------
+
+
+def test_template_with_no_steps_schedules_the_existing_workout():
+    pb = load_playbook()
+    s = session(garmin_workout_id="1414012813", template_key="full_body_a", steps=[])
+    assert use_existing_workout(s, pb) is True
+
+
+def test_adapted_day_is_rebuilt_even_when_it_echoes_the_template_id():
+    """The bug: the model returns custom steps AND the template's Garmin ID, and
+    the athlete's edits were silently dropped in favour of stock Full Body A."""
+    pb = load_playbook()
+    s = session(
+        garmin_workout_id="1414012813", template_key="full_body_a",
+        steps=[
+            ExerciseStep(exercise="Goblet squat", sets=3, reps=12),
+            ExerciseStep(exercise="Bulgarian split squat", sets=3, reps=8),  # not in the template
+        ],
+    )
+    assert use_existing_workout(s, pb) is False
+
+
+def test_prescribed_weight_counts_as_an_adaptation():
+    pb = load_playbook()
+    unchanged = template_prescription(pb.workouts["full_body_a"])
+    steps = [
+        ExerciseStep(exercise=name, sets=sets, reps=reps, duration_sec=secs)
+        for name, sets, reps, secs in unchanged
+    ]
+    steps[3] = steps[3].model_copy(update={"weight_kg": 20.0})  # "bump goblet squats to 20kg"
+    s = session(garmin_workout_id="1414012813", template_key="full_body_a", steps=steps)
+    assert use_existing_workout(s, pb) is False
+
+
+def test_verbatim_echo_of_the_template_still_schedules_by_id():
+    """A model that restates the template instead of leaving steps empty must not
+    cost the athlete the weights loaded on the Garmin workout."""
+    pb = load_playbook()
+    steps = [
+        ExerciseStep(exercise=name, sets=sets, reps=reps, duration_sec=secs)
+        for name, sets, reps, secs in template_prescription(pb.workouts["full_body_a"])
+    ]
+    s = session(garmin_workout_id="1414012813", template_key="full_body_a", steps=steps)
+    assert use_existing_workout(s, pb) is True
+
+
+def test_custom_day_without_a_template_id_is_always_built():
+    pb = load_playbook()
+    s = session(steps=[ExerciseStep(exercise="Bench press", sets=3, reps=8)])
+    assert use_existing_workout(s, pb) is False

@@ -185,6 +185,37 @@ def test_approve_schedules_by_id_and_creates_custom_days():
     assert "Full Body A" in summary and "rest day" in summary
 
 
+def test_adapted_template_day_pushes_the_edits_not_the_stock_workout():
+    """Regression: the model echoes full_body_a's Garmin ID alongside the swapped
+    exercises, and the push scheduled stock Full Body A — the athlete's custom
+    plan never reached the watch."""
+    f = Fakes()
+    f.kv["draft"] = [
+        day("2026-07-09", title="Full Body A (knee-friendly)",
+            garmin_workout_id="1414012813", template_key="full_body_a",
+            steps=[{"exercise": "Goblet squat", "sets": 3, "reps": 12,
+                    "duration_sec": None, "weight_kg": 16, "notes": ""},
+                   {"exercise": "Leg press", "sets": 3, "reps": 10,
+                    "duration_sec": None, "weight_kg": 40, "notes": ""}]),
+    ]
+    summary = approve(f.deps())
+    # a NEW workout is built from the steps; the template ID is never scheduled
+    assert f.created and f.created[0].steps[1].exercise == "Leg press"
+    assert f.scheduled == [("9999", date(2026, 7, 9))]
+    assert ("1414012813", date(2026, 7, 9)) not in f.scheduled
+    assert "created + scheduled" in summary
+
+
+def test_untouched_template_day_still_schedules_by_id():
+    """The other half: an unchanged template must keep its loaded Garmin weights."""
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-09", title="Full Body A", steps=[],
+                         garmin_workout_id="1414012813", template_key="full_body_a")]
+    approve(f.deps())
+    assert f.scheduled == [("1414012813", date(2026, 7, 9))]
+    assert f.created == []
+
+
 def test_partial_edit_merges_and_keeps_other_days():
     f = Fakes([{"reply": "made Fri easier", "goals": None,
                 "draft": [day("2026-07-10", title="Easy mobility", kind="mobility",

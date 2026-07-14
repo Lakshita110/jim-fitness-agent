@@ -12,6 +12,7 @@ from jim.schemas import (
     NotionDay,
     ResearchHit,
     StructuredSession,
+    WorkoutRef,
 )
 
 TODAY = date(2026, 7, 6)
@@ -176,16 +177,40 @@ def test_plan_for_today_targets_today_everywhere():
 
 
 def test_base_template_schedules_by_id_without_rebuild(monkeypatch):
-    # When the agent selects a base workout (garmin_workout_id set) and auto-push
-    # is on, the loop schedules the existing Garmin workout — never rebuilds it.
+    # An UNCHANGED base workout (template ID, no steps of its own) is scheduled as
+    # the existing Garmin workout — never rebuilt, so its loaded weights survive.
     import jim.agent.loop as loop_mod
 
     monkeypatch.setattr(loop_mod, "AUTO_PUSH", True)
     scheduled: list = []
-    selected = sane_session(TOMORROW, garmin_workout_id="1414015802", template_key="full_body_b")
+    selected = sane_session(
+        TOMORROW, garmin_workout_id="1414015802", template_key="full_body_b", steps=[]
+    )
     rec = Recorder(compose_outputs=[selected])
     tb = rec.toolbox()
     tb.schedule_workout = lambda wid, on: scheduled.append((wid, on))
     # create_garmin_workout still raises if called — proves no rebuild happened
     run_agent(TODAY, tools=tb)
     assert scheduled == [("1414015802", TOMORROW)]
+
+
+def test_adapted_session_is_rebuilt_even_if_it_echoes_a_template_id(monkeypatch):
+    # The model routinely copies the template's Garmin ID onto a session it has
+    # actually adapted. Scheduling that ID would push the stock workout and throw
+    # the adaptation away, so a session carrying its own steps is always built.
+    import jim.agent.loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "AUTO_PUSH", True)
+    scheduled: list = []
+    created: list = []
+    adapted = sane_session(
+        TOMORROW, garmin_workout_id="1414015802", template_key="full_body_b",
+        steps=[ExerciseStep(exercise="Leg press", sets=3, reps=10)],
+    )
+    rec = Recorder(compose_outputs=[adapted])
+    tb = rec.toolbox()
+    tb.schedule_workout = lambda wid, on: scheduled.append((wid, on))
+    tb.create_garmin_workout = lambda s: (created.append(s), WorkoutRef(workout_id="777"))[1]
+    run_agent(TODAY, tools=tb)
+    assert created and created[0].steps[0].exercise == "Leg press"
+    assert scheduled == [("777", TOMORROW)]

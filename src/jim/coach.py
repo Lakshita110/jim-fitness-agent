@@ -33,6 +33,7 @@ from jim.config import (
     MODEL_FAST,
     OPENROUTER_BASE_URL,
 )
+from jim.playbook import Playbook, load_playbook, use_existing_workout
 from jim.schemas import HistoryFeatures, StructuredSession
 
 log = logging.getLogger(__name__)
@@ -116,9 +117,13 @@ add volume or load when the ratio is already high or recovery is poor; say one
 plain line about why when it changes the plan.
 
 The PLAYBOOK below is the athlete's base A/B/C strength rotation and PT routines.
-Prefer selecting a template unchanged: set its garmin_workout_id and template_key
-on that day and leave steps empty (the existing Garmin workout is scheduled as-is,
-weights preserved). Hand-build steps only when adapting.
+A day is EITHER a template pick OR an adaptation — never both:
+- Template unchanged: set garmin_workout_id and template_key, and leave "steps"
+  EMPTY. The existing Garmin workout is scheduled as-is, weights preserved.
+- Adapted (you swapped, added, dropped, or re-loaded ANYTHING): set
+  garmin_workout_id AND template_key to null and list the FULL steps. Never
+  return a template's garmin_workout_id next to steps you changed — the steps
+  are what the athlete sees, so the steps are what gets built on the watch.
 
 LONG-TERM GOALS: the athlete's goals are a plain-text block you maintain. When they
 state, change, or complete a goal, return the FULL rewritten goals block in "goals"
@@ -170,6 +175,9 @@ class CoachDeps:
     record_suggestion: Callable[..., int]
     playbook_text: Callable[[], str]
     now: Callable[[], datetime]
+    # Only consulted when a day carries a template ID, to tell an untouched
+    # template apart from an adapted one before pushing.
+    playbook: Callable[[], Playbook] = load_playbook
 
     @classmethod
     def live(cls) -> "CoachDeps":
@@ -310,7 +318,9 @@ def format_draft(sessions: list[StructuredSession]) -> str:
     lines = []
     for s in sessions:
         head = f"{s.for_date} — {s.title} ({s.kind}, ~{s.est_duration_min:.0f} min)"
-        if s.garmin_workout_id:
+        # Only claim "existing workout" when that's what will actually be pushed:
+        # a day carrying steps is built from those steps, template ID or not.
+        if s.garmin_workout_id and not s.steps:
             head += f" [existing workout: {s.template_key or s.garmin_workout_id}]"
         lines.append(head)
         for step in s.steps[:10]:
@@ -346,12 +356,21 @@ def _push_status(deps: CoachDeps, sessions: list[StructuredSession]) -> dict[str
 
 
 def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
-    """Schedule a single session on the watch (creating the workout first when
-    it isn't an existing template) and record it. Returns a summary line."""
+    """Schedule a single session on the watch and record it. Returns a summary line.
+
+    An untouched template is scheduled by ID (its loaded weights live on Garmin,
+    not here); anything the athlete adapted is built fresh from its steps. The
+    steps are what they can see in the plan, so the steps are what must land on
+    the watch — see playbook.use_existing_workout."""
     fd = session.for_date
+    as_template = bool(
+        session.kind != "rest"
+        and session.garmin_workout_id  # short-circuits: no template ID, no playbook read
+        and use_existing_workout(session, deps.playbook())
+    )
     if session.kind == "rest":
         pass  # rest schedules nothing on the watch
-    elif session.garmin_workout_id:
+    elif as_template:
         deps.schedule_workout(session.garmin_workout_id, fd)
     else:
         ref = deps.create_garmin_workout(session)
@@ -361,7 +380,7 @@ def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
     )
     if session.kind == "rest":
         return f"{fd}: rest day (nothing scheduled)"
-    verb = "scheduled" if session.garmin_workout_id else "created + scheduled"
+    verb = "scheduled" if as_template else "created + scheduled"
     return f"{fd}: {verb} {session.title}"
 
 
