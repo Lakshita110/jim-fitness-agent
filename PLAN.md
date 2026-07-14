@@ -7,6 +7,22 @@
 >
 > Rename freely — "Vesper" is a placeholder (evening / nightly).
 
+> [!NOTE]
+> **This is the original design record, kept for the reasoning.** The agent
+> shipped as **Jim**, and five things went differently. For what the system
+> actually is today, read `CLAUDE.md`.
+>
+> | PLAN said | Reality |
+> |---|---|
+> | Deploy on Render (web + cron) | **Vercel** serverless + **Neon** Postgres; the nightly is an HTTP endpoint (`/api/cron/nightly`), not a process (DEPLOY.md) |
+> | "No web UI in v1 — Notion is the interface" | **Jim's chat** is the interface (`coach.py`, docs/chat.md). Notion is **read-only** and supplies only the habits/knee log; Jim never writes to it |
+> | Proposals written to a Notion DB | Proposals land as the **chat draft** in the kv store |
+> | Guardrail includes a weekly volume cap (§7) | **Dropped.** Hard rules are safety only; balance across muscle groups is *advisory* — see `agent/validate.py` for why |
+> | Nightly + a separate morning reconcile job | **One** nightly run: reconcile today, then plan tomorrow |
+>
+> Still true: the cost discipline (§4), the one-generative-step design, gated
+> research, tier escalation, propose-only until M5 evals gate `AUTO_PUSH`.
+
 ---
 
 ## 1. Purpose

@@ -8,8 +8,10 @@ week), keep long-term goals in plain language, and push to Garmin with one
 button. Chat-approved days are scheduled on the watch; the nightly run never
 overrides them.
 
-Full design: [PLAN.md](PLAN.md) (agent originally code-named Vesper).
-Milestone status:
+Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
+[docs/architecture.md](docs/architecture.md). [PLAN.md](PLAN.md) is the original
+design record — kept for the reasoning, superseded in places (agent was
+originally code-named Vesper). Milestone status:
 
 - [x] **M1** — Garmin write round-trip: verified server-side + on-watch
       (docs/garmin_strength.md, exercise taxonomy verified against Garmin's own)
@@ -19,31 +21,41 @@ Milestone status:
 - [ ] **M5** — Eval suite gating `AUTO_PUSH` (`evals/run_evals.py` scaffold; needs live-compose scenarios)
 
 Interactive surface: **the chat** (docs/chat.md). Memory model incl. long-term
-goals: docs/memory.md.
+goals: docs/memory.md. Intensity is steered by a readiness read (acute:chronic
+workload ratio + recovery → push/steady/ease/rest, `tools/history.py`).
 
 ## Layout
 
 ```
 src/jim/
-  config.py          # PLAN §8 constants + env-backed secrets
+  config.py          # PLAN §8 constants + guardrail bounds + env-backed secrets
   schemas.py         # typed tool contracts (PLAN §7)
   db.py              # Postgres + idempotent migrations + kv store
+  migrations/        # additive, idempotent SQL (001-006); ships inside the package
+  static/            # committed PWA icons (no Pillow at runtime)
   tools/             # garmin, notion (read-only), history, research (gated), memory
   agent/
     heuristics.py    # off-heuristic (gates research) + tier escalation
     compose.py       # the one generative step: state -> StructuredSession JSON
-    validate.py      # deterministic guardrail + conservative fallback
+    validate.py      # hard safety guardrail + advisory balance + fallback
     loop.py          # run_agent: bounded, injectable toolbox
-  jobs/              # nightly run (single cron: reconcile today + plan tomorrow)
+  jobs/              # nightly.py (sync + reconcile + plan) and reconcile.py
   playbook.py        # loads playbook/ (base workouts + PT + directives) into context
   coach.py           # Jim's chat: iterate on drafts, goals memory, approve -> Garmin
-  app.py             # thin FastAPI (health + manual trigger + /chat)
+  app.py             # FastAPI: health, /run, /api/cron/nightly, /chat + PWA
+api/index.py         # Vercel entrypoint — re-exports app.app as the ASGI handler
 playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
-migrations/          # additive, idempotent SQL (PLAN §6 + kv/chat)
-scripts/             # m1_roundtrip.py (live), backfill.py (live), seed_corpus.py
+data/corpus/         # curated research corpus (seeded by scripts/seed_corpus.py)
+docs/                # architecture, chat, memory, garmin_strength, notion_schema
+scripts/             # m1_roundtrip.py, backfill.py, garmin_login.py, seed_corpus.py
 evals/               # M5 scaffold: plan quality / tool use / cost
 tests/               # offline only — recorded fixtures, no live APIs
 ```
+
+The guardrail (`agent/validate.py`) splits in two: **hard** rules reject a day
+(forbidden movements, session length, Garmin's step cap, leg-day spacing) and
+**advisory** balance notes tell the coach when the plan is skewed across
+legs/push/pull/core/conditioning. There is deliberately no weekly volume cap.
 
 ## Setup
 

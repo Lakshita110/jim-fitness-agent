@@ -14,21 +14,21 @@ flowchart TB
 
     subgraph vercel["Vercel"]
         subgraph web["web service (FastAPI)"]
-            CHATUI["/chat page + API<br/>CHAT_SECRET"]
+            CHATUI["/chat page + API + PWA<br/>CHAT_SECRET → session cookie"]
             COACH["coach.py<br/>conversation engine<br/>MODEL_FAST via OpenRouter"]
         end
-        CRON["nightly cron 21:00<br/>jobs/nightly.py"]
+        CRON["nightly cron 20:00 UTC<br/>/api/cron/nightly → jobs/nightly.py"]
         subgraph pg["Postgres"]
-            KV["kv: chat history ·<br/>working draft · goals ·<br/>state cache"]
+            KV["kv: chat history · working draft ·<br/>goals · pushed map · state cache"]
             TABLES["garmin_daily · activities ·<br/>exercise_sets (reps+kg per set) ·<br/>notion_daily_log · suggestions ·<br/>outcomes · research_corpus"]
         end
     end
 
     subgraph loop["agent core (shared)"]
-        STATE["state tools<br/>garmin.py · notion.py (read-only) ·<br/>history.py features"]
+        STATE["state tools<br/>garmin.py · notion.py (read-only) ·<br/>history.py features + readiness"]
         HEUR["heuristics.py<br/>off? → research gate<br/>ambiguous? → tier escalation"]
         COMPOSE["compose.py<br/>the ONE generative step"]
-        VALIDATE["validate.py — HARD GUARDRAIL<br/>forbidden moves · session length ·<br/>weekly volume · leg-day spacing<br/>(revise once, then fallback)"]
+        VALIDATE["validate.py<br/>HARD (rejects): forbidden moves ·<br/>session length · step cap · leg spacing<br/>ADVISORY: balance notes<br/>(revise once, then fallback)"]
         PLAYBOOK["playbook/ (git)<br/>A/B/C base workouts ·<br/>PT home+gym · directives.md"]
     end
 
@@ -69,21 +69,35 @@ exercise, reps, kg). That's the progression memory: when you ask Jim to "bump
 goblet squats," it calls `exercise_history("goblet squat")`, sees
 `2026-07-05: 3x12 @ 16kg`, and prescribes conservatively from reality.
 
-**21:00 nightly** (`jobs/nightly.py`) — reconcile today's plan vs. actuals →
-sync state → *if you already chat-planned tomorrow, stop* → otherwise: read
-state + playbook + goals → cheap-heuristic research gate → compose (one LLM
-call, escalating to the quality tier only on ambiguous state) → guardrail →
-the proposal lands as the **chat draft**. Nothing is pushed unattended
-(AUTO_PUSH stays off until the M5 evals gate it).
+**Nightly** (`jobs/nightly.py`, Vercel Cron at 20:00 UTC — deliberately after
+the training day) — sync today's Garmin + Notion into Postgres → reconcile
+today's plan vs. actuals → *if you already chat-planned tomorrow, stop* →
+otherwise: read state + playbook + goals → cheap-heuristic research gate →
+compose (one LLM call, escalating to the quality tier only on ambiguous
+state) → guardrail → the proposal lands as the **chat draft**. Nothing is
+pushed unattended (AUTO_PUSH stays off until the M5 evals gate it). The whole
+run must finish inside the function's `maxDuration`, so it returns
+`elapsed_sec`.
 
 **Any time, in chat** (`coach.py`) — one continuous conversation. Each turn:
-state snapshot (cached 1h) + playbook + goals + current draft + last 30
-messages → the model may make up to 4 lookups (exercise history, workout
-history, research) → returns `{reply, draft?, goals?}`. Draft days pass the
-same guardrail. Saying "my long-term goal is…" rewrites the goals block —
-memory without scheduling. **Push to Garmin** schedules each draft day
-(template days by ID with your loaded weights; adapted days created fresh)
-and marks them `source='chat'` so the nightly run steps aside.
+state snapshot (cached 1h, each source degrading independently) + playbook +
+goals + current draft + balance notes + last 30 messages → the model may make
+up to 4 lookups (exercise history, workout history, research) → returns
+`{reply, draft?, goals?}`. A returned draft is **merged by date** onto the
+existing plan, so a single-day edit can't silently drop the rest of the week;
+the merged plan is then validated as a whole (leg spacing only means something
+when the days are seen together), revised once, and any day still failing is
+dropped with a note. Saying "my long-term goal is…" rewrites the goals block —
+memory without scheduling.
+
+**Pushing** — the draft reaches the watch only on an explicit button: **Push to
+Garmin** (whole draft, `coach.approve`) or a single day (`coach.push_day`).
+Template days schedule the existing Garmin workout by ID (loaded weights
+preserved); adapted days are created fresh. Re-pushing a day unschedules the
+previous one first, so the watch never ends up with duplicates. Pushed days are
+recorded `source='chat'` (the nightly run steps aside for them) and tracked in
+the `pushed` kv map with a content hash, which is what lets the UI badge a day
+as *pushed* or *modified since push*.
 
 ## Memory hierarchy
 
@@ -92,12 +106,15 @@ and marks them `source='chat'` so the nightly run steps aside.
 | directives.md | git | you | standing policy |
 | goals | Postgres kv | chat | months |
 | draft | Postgres kv | chat + nightly | this week |
+| pushed | Postgres kv | the push buttons | until re-pushed |
 | exercise_sets / suggestions / outcomes | Postgres | the system | history |
 
 ## Cost discipline
 
 - Deterministic Python computes features; the LLM only composes and converses.
 - Nightly: ≤2 LLM calls (compose + one revision), research gated by a
-  heuristic, quality tier only on ambiguous state, hard tool-call cap.
-- Chat: 1 LLM call per turn + ≤4 lookups, state cached, history truncated.
-- Guardrail and fallback are code, not model.
+  heuristic, quality tier only on ambiguous state, hard tool-call cap
+  (`MAX_TOOL_CALLS`).
+- Chat: 1 LLM call per turn + ≤4 lookup rounds, state cached for an hour,
+  history truncated to the last 30 messages.
+- Guardrail, balance maths, and fallback are code, not model.

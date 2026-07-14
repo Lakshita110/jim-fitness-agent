@@ -128,12 +128,17 @@ with no browser chrome:
 - **iOS / Safari** — Share → **Add to Home Screen**
 - **Android / Chrome** — ⋮ → **Install app**
 
-The installed app launches straight into the chat: the key is baked into the
-manifest's `start_url`, so you never type it again.
+The installed app launches straight into the chat. You only ever type the key
+once: a valid `?key=` sets an httpOnly session cookie (~13 months) and the
+manifest's `start_url` is the bare `/chat`, authenticated by that cookie. No
+secret is baked into the manifest or the icons, which is why the browser can
+fetch both during install.
 
 > **The key is the only thing protecting your chat.** Anyone with that URL can talk
 > to Jim and push workouts to your watch. Don't paste it anywhere public. To
-> rotate: change `CHAT_SECRET` in Vercel, redeploy, re-install on the phone.
+> rotate: change `CHAT_SECRET` in Vercel and redeploy — every existing session
+> cookie is derived from the secret, so they all invalidate at once and each
+> device has to re-enter the new key.
 
 ---
 
