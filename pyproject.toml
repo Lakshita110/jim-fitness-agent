@@ -35,7 +35,7 @@ where = ["src"]
 # bundle (and any non-editable install) includes package data but not loose
 # top-level directories.
 [tool.setuptools.package-data]
-jim = ["static/*.png", "migrations/*.sql"]
+jim = ["static/*.png", "migrations/*.sql", "data/*.json"]
 
 [tool.ruff]
 line-length = 100

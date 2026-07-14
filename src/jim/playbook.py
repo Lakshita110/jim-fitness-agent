@@ -169,10 +169,13 @@ def _render_template(wt: WorkoutTemplate) -> str:
 
 
 def load_playbook(directory: Path = PLAYBOOK_DIR) -> Playbook:
-    base = yaml.safe_load((directory / "base_workouts.yaml").read_text()) or {}
-    pt = yaml.safe_load((directory / "pt_routines.yaml").read_text()) or {}
+    # Always utf-8: the playbook is full of em dashes and degree signs, and
+    # read_text() defaults to the locale encoding (cp1252 on Windows), which
+    # mangles them into the prompt, the exercise match, and the watch.
+    base = yaml.safe_load((directory / "base_workouts.yaml").read_text("utf-8")) or {}
+    pt = yaml.safe_load((directory / "pt_routines.yaml").read_text("utf-8")) or {}
     directives_path = directory / "directives.md"
-    directives = directives_path.read_text() if directives_path.exists() else ""
+    directives = directives_path.read_text("utf-8") if directives_path.exists() else ""
 
     workouts = {
         key: WorkoutTemplate(key=key, **spec)

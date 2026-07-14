@@ -29,6 +29,10 @@ Everything expensive is deterministic Python. The LLM is generative at exactly
 **one** step — turning `{state + playbook + goals}` into a structured session —
 and conversational in the chat. It never decides whether something is safe.
 
+(One narrow exception, on the push path: naming an exercise Garmin's word-matcher
+can't place. It's gated, batched, cached, and its answer is validated against
+Garmin's real taxonomy — see `tools/exercise_match.py`.)
+
 ### The pieces
 
 | Module | Job |
@@ -36,7 +40,8 @@ and conversational in the chat. It never decides whether something is safe.
 | `config.py` | Model tiers, tool-call caps, and the guardrail bounds. Behavioural constants live here so they're grep-able. |
 | `schemas.py` | The typed contracts. `StructuredSession` is the currency of the whole system. |
 | `db.py` | Postgres, idempotent migrations, and a `kv` store that holds most of the mutable state. |
-| `tools/garmin.py` | Reads recovery/activities/per-set data; builds and schedules structured workouts. The verified JSON shape is hard-won — see `docs/garmin_strength.md` before touching it. |
+| `tools/garmin.py` | Reads recovery/activities/per-set data; builds and schedules structured workouts, matching each movement to Garmin's exercise library. The verified JSON shape is hard-won — see `docs/garmin_strength.md` before touching it. |
+| `tools/exercise_match.py` | The semantic fallback: names Garmin's word-matcher can't place, batched + cached + validated against the real taxonomy. |
 | `tools/notion.py` | **Read-only.** Only the habits/knee log. Jim never writes to Notion. |
 | `tools/history.py` | Deterministic features (volume, muscle balance, days-since-legs, pain trend) and the readiness read (acute:chronic workload + recovery → push/steady/ease/rest). |
 | `tools/research.py` | Gated: curated corpus (pgvector) + Tavily. Only reachable when the off-heuristic fires. |
@@ -89,6 +94,18 @@ stock Full Body A landed on the watch.
 `exercise_history("goblet squat")` and reads back actual sets × reps @ kg from
 the watch, then progresses conservatively. Don't let it guess.
 
+**Every movement must land on a real Garmin exercise.** Garmin's taxonomy is a
+closed enum; a step it can't place arrives as a bare note — no exercise, no
+animation, no set logging. So the whole library is vendored
+(`data/garmin_exercises.json`, refreshed by `scripts/refresh_garmin_exercises.py`)
+and matching is layered: hand-kept overrides for the PT movements Garmin genuinely
+lacks → nearest name by word overlap → an LLM for what the words can't settle.
+Words alone go wrong in both directions (nothing at all for `hip airplane`;
+confidently `PLATE_RAISES` for a tibialis raise), so the model arbitrates anything
+below `CONFIDENT_MATCH_SCORE` — but **its answer is validated against the library**,
+because it will invent enums, and a described step beats a wrong one. The rules and
+the mis-pushes behind them are in `docs/garmin_strength.md`.
+
 ## State
 
 Postgres tables are history (`garmin_daily`, `garmin_activities`,
@@ -102,6 +119,7 @@ Postgres tables are history (`garmin_daily`, `garmin_activities`,
 | `pushed` | What's on the watch: per date, a title + content hash (that hash is how the UI badges a day *modified since push*) |
 | `chat_history` | Last 30 messages |
 | `state` | Day snapshot (garmin/notion/features/readiness), cached 1h |
+| `exercise_map` | Movement name → the Garmin exercise it resolved to (nulls cached too, so a name costs one LLM call ever) |
 
 Memory hierarchy, from most to least durable: `playbook/directives.md` (git,
 you edit it) → `goals` (chat) → `draft` (chat + nightly) → history tables. The
