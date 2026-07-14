@@ -9,10 +9,16 @@ client = TestClient(app_mod.app)
 
 
 @pytest.fixture(autouse=True)
-def _fresh_session():
+def _fresh_session(monkeypatch):
     """Signing in sets a session cookie, and TestClient keeps cookies — so without
     this, one test's sign-in would silently authenticate the next test's
-    "bad key must be rejected" assertions."""
+    "bad key must be rejected" assertions.
+
+    Also stub `_ready()`: these are unit tests of routing/auth/serialization with
+    `coach` mocked, so the schema-migration step is not under test. Left real, it
+    calls db.ensure_migrated() → connect(), which now hard-raises without a live
+    DATABASE_URL and turns every chat-endpoint test into a 500."""
+    monkeypatch.setattr(app_mod, "_ready", lambda: None)
     client.cookies.clear()
     yield
     client.cookies.clear()
