@@ -141,7 +141,10 @@ one). Call workout_history for what recently happened; call research for
 pain-driven substitutions and cite the sources in your reply.
 
 Today is {today}. Respond ONLY with a JSON object:
-{{"reply": str,                      # plain text, no markdown — read as a chat message
+{{"reply": str,                      # chat message; light markdown ok (**bold**, "- " bullets,
+                                     # "## " headings) for anything structured like a weekly
+                                     # schedule — it renders. Don't reach for it in ordinary
+                                     # back-and-forth replies.
   "draft": [session, ...] | null,   # null = keep current draft unchanged; [] = clear it
   "goals": str | null}}              # null = goals unchanged; string = replace block
 Each session: {{"for_date": "YYYY-MM-DD", "kind": "strength|conditioning|mobility|rest",

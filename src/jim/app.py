@@ -347,6 +347,9 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .me .msg { background: var(--bubble-me); color: var(--ink); border-bottom-right-radius: 5px; }
 .bot .msg { background: var(--bubble-bot); color: var(--ink); border-bottom-left-radius: 5px;
             border: 1px solid rgba(255,255,255,.04); }
+.msg strong { font-weight: 700; }
+.msg strong.md-h { display: block; margin: 2px 0 5px; font-size: 11px; font-weight: 700;
+                    letter-spacing: .07em; text-transform: uppercase; color: var(--data); }
 .msg.busy { display: flex; gap: 4px; align-items: center; padding: 14px; }
 .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted);
        animation: bounce 1.3s infinite; }
@@ -550,6 +553,20 @@ let curReadiness = null, curPain = null, serverToday = null;
 let curPushStatus = {}, curDraft = [], scopeDate = null;
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+// The model is asked for plain text but reaches for markdown anyway (headers,
+// **bold**, bullet lists) when a reply is structured, e.g. a 7-day schedule.
+// Render the common cases instead of fighting it turn after turn. Escaped
+// first, so this only ever adds <strong>/bullet-glyph — never raw HTML from
+// the model. Deliberately NOT real <ul>/<ol>: the model already numbers days
+// itself, and rebuilding that as semantic lists would restart numbering at
+// each indented sub-bullet break.
+function renderMD(s) {
+  let out = esc(String(s));
+  out = out.replace(/^(#{1,4})[ \\t]+(.+)$/gm, '<strong class="md-h">$2</strong>');
+  out = out.replace(/\\*\\*([^*\\n]+)\\*\\*/g, "<strong>$1</strong>");
+  out = out.replace(/^([ \\t]*)[-*][ \\t]+/gm, "$1• ");
+  return out;
+}
 // Base-workout names carry an em-dash that the model sometimes corrupts to a
 // control char (e.g. "PT Day <DEL> Home"); restore it so titles read cleanly.
 function cleanTitle(s) { return String(s).replace(/[\\x00-\\x1F\\x7F]+/g, " — ").replace(/\\s+/g, " ").trim(); }
@@ -630,7 +647,9 @@ function bubble(role, node) {
   const row = document.createElement("div"); row.className = "row " + role;
   if (role === "bot") { const av = document.createElement("div"); av.className = "avatar"; row.appendChild(av); }
   const m = document.createElement("div"); m.className = "msg";
-  if (typeof node === "string") m.textContent = node; else m.appendChild(node);
+  if (typeof node !== "string") m.appendChild(node);
+  else if (role === "bot") m.innerHTML = renderMD(node);
+  else m.textContent = node;
   row.appendChild(m); log.appendChild(row); log.scrollTop = log.scrollHeight; return m;
 }
 function add(role, text) { return bubble(role, text); }
@@ -639,7 +658,7 @@ function typing() {
   m.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
   return m;
 }
-function settle(m, text) { m.classList.remove("busy"); m.textContent = text; }
+function settle(m, text) { m.classList.remove("busy"); m.innerHTML = renderMD(text); }
 
 // Short holds read naturally in seconds (a 30s plank); anything a minute or
 // longer reads better in minutes (1800s -> 30m).
