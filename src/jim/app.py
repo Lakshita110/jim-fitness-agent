@@ -283,6 +283,58 @@ def post_playbook(body: PlaybookBody, request: Request) -> dict:
     return {"ok": True}
 
 
+class GarminWorkoutImportBody(BaseModel):
+    workout_id: str
+    key: str
+    label: str | None = None
+    target: str = "workouts"  # "workouts" (base rotation) or "pt_routines"
+    add_to_rotation: bool = False
+
+
+@app.get("/api/garmin/workouts")
+def list_garmin_workouts_route(request: Request) -> dict:
+    """The athlete's existing Garmin workout library, so the playbook editor
+    can offer 'import this one' instead of only hand-typed YAML/JSON."""
+    user = _require_user(request)
+    _ready()
+    from jim.tools.garmin import list_garmin_workouts
+
+    try:
+        workouts = list_garmin_workouts(user.id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"workouts": workouts}
+
+
+@app.post("/api/garmin/workouts/import")
+def import_garmin_workout(body: GarminWorkoutImportBody, request: Request) -> dict:
+    """Pull one real Garmin workout in by id and save it into the playbook
+    under `body.key`, so it can be scheduled by ID like any other template
+    (see playbook.use_existing_workout)."""
+    user = _require_user(request)
+    _ready()
+    from jim.tools.garmin import get_garmin_workout_detail, parse_workout_to_template
+
+    try:
+        raw = get_garmin_workout_detail(user.id, body.workout_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    template = parse_workout_to_template(body.key, raw)
+    if body.label:
+        template.label = body.label
+
+    pb = load_playbook(user.id)
+    if body.target == "pt_routines":
+        pb.pt_routines[body.key] = template
+    else:
+        pb.workouts[body.key] = template
+        if body.add_to_rotation and body.key not in pb.rotation:
+            pb.rotation.append(body.key)
+    save_playbook(user.id, pb)
+    return {"ok": True, "playbook": pb.model_dump(mode="json")}
+
+
 # --- Garmin web onboarding (soft-baking-kettle plan Phase 4) ------------------
 #
 # The installed garminconnect (>=0.2.19, verified by reading the installed
@@ -511,6 +563,19 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .pb-msg { font-size: 12.5px; color: var(--muted); }
 .pb-msg.err { color: var(--warn); }
 .pb-msg.ok { color: var(--sage); }
+.pb-import { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px;
+             padding: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--glass-line);
+             border-radius: 12px; }
+.pb-import select, .pb-import input[type="text"] { background: rgba(255,255,255,.04);
+             border: 1px solid var(--glass-line); border-radius: 8px; color: var(--ink);
+             font-family: inherit; font-size: 12px; padding: 6px 8px; }
+#pbGarminSelect { flex: 1 1 220px; min-width: 160px; }
+#pbImportKey { flex: 0 1 160px; }
+.pb-import-rot { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.pb-import-btn { padding: 6px 14px; border: none; border-radius: 999px;
+             background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
+             font-weight: 600; font-size: 12px; font-family: inherit; cursor: pointer; }
+.pb-import-btn:disabled { opacity: .5; cursor: default; }
 
 .main { flex: 1; display: flex; min-height: 0; position: relative; }
 .chat-col { flex: 1 1 58%; min-width: 0; display: flex; flex-direction: column;
@@ -709,6 +774,16 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
     <div class="pb-head">
       <div class="pb-title">Playbook</div>
       <button type="button" class="pb-close" id="pbClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="pb-import">
+      <select id="pbGarminSelect"><option value="">Loading Garmin workouts…</option></select>
+      <input id="pbImportKey" type="text" placeholder="key (e.g. full_body_d)" />
+      <select id="pbImportTarget">
+        <option value="workouts">base rotation</option>
+        <option value="pt_routines">PT routine</option>
+      </select>
+      <label class="pb-import-rot"><input id="pbAddToRotation" type="checkbox" /> add to rotation</label>
+      <button type="button" class="pb-import-btn" id="pbImportBtn">Import</button>
     </div>
     <textarea id="pbText" spellcheck="false"></textarea>
     <div class="pb-foot">
@@ -1109,8 +1184,46 @@ async function openPlaybook() {
     if (!r.ok) { pbSetMsg("Couldn't load playbook", "err"); return; }
     pbText.value = text; pbSetMsg("");
   } catch { pbSetMsg("network error", "err"); }
+  loadGarminWorkouts();
 }
 document.getElementById("playbookLink").addEventListener("click", (e) => { e.preventDefault(); openPlaybook(); });
+
+/* --- import an existing Garmin workout into the playbook --- */
+const pbGarminSelect = document.getElementById("pbGarminSelect"), pbImportBtn = document.getElementById("pbImportBtn");
+const pbImportKey = document.getElementById("pbImportKey"), pbImportTarget = document.getElementById("pbImportTarget");
+const pbAddToRotation = document.getElementById("pbAddToRotation");
+async function loadGarminWorkouts() {
+  pbGarminSelect.innerHTML = '<option value="">Loading Garmin workouts…</option>';
+  try {
+    const r = await fetch("/api/garmin/workouts");
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      pbGarminSelect.innerHTML = `<option value="">${data.detail || "Couldn't load Garmin workouts"}</option>`;
+      return;
+    }
+    const workouts = data.workouts || [];
+    if (!workouts.length) { pbGarminSelect.innerHTML = '<option value="">No Garmin workouts found</option>'; return; }
+    pbGarminSelect.innerHTML = '<option value="">Select a Garmin workout…</option>' +
+      workouts.map(w => `<option value="${w.workout_id}">${w.name || "(untitled)"}</option>`).join("");
+  } catch { pbGarminSelect.innerHTML = '<option value="">network error</option>'; }
+}
+pbImportBtn.addEventListener("click", async () => {
+  const workout_id = pbGarminSelect.value, key = pbImportKey.value.trim();
+  if (!workout_id) { pbSetMsg("pick a Garmin workout first", "err"); return; }
+  if (!key) { pbSetMsg("give it a playbook key", "err"); return; }
+  pbImportBtn.disabled = true; pbSetMsg("Importing…");
+  try {
+    const r = await fetch("/api/garmin/workouts/import", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        workout_id, key, target: pbImportTarget.value, add_to_rotation: pbAddToRotation.checked,
+      }) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { pbSetMsg(data.error || data.detail || "import failed", "err"); return; }
+    pbText.value = JSON.stringify(data.playbook, null, 2);
+    pbSetMsg("Imported", "ok");
+  } catch { pbSetMsg("network error", "err"); }
+  finally { pbImportBtn.disabled = false; }
+});
 document.getElementById("pbClose").addEventListener("click", () => pbOverlay.classList.remove("open"));
 pbOverlay.addEventListener("click", (e) => { if (e.target === pbOverlay) pbOverlay.classList.remove("open"); });
 pbSave.addEventListener("click", async () => {
