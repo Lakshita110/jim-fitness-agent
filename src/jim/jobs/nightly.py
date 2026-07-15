@@ -109,6 +109,26 @@ def sync_today(user_id: int) -> None:
         conn.commit()
 
 
+def cleanup_stale_adaptations(user_id: int, today: date) -> None:
+    """Delete one-off Garmin workouts (built for a single adapted day, never
+    promoted into the playbook) whose day has already passed — see the
+    "jim_created_workouts" kv entry written by coach._push_one. A failed
+    delete just leaves the entry for tomorrow's sweep to retry."""
+    from jim.db import kv_get, kv_set
+    from jim.tools import garmin
+
+    created = kv_get(user_id, "jim_created_workouts") or {}
+    for fd in [d for d in created if date.fromisoformat(d) < today]:
+        try:
+            garmin.delete_garmin_workout(user_id, created[fd]["workout_id"])
+        except Exception:
+            log.warning("couldn't delete stale workout for user %s on %s",
+                        user_id, fd, exc_info=True)
+            continue
+        del created[fd]
+    kv_set(user_id, "jim_created_workouts", created)
+
+
 def _run_nightly_for_user(user_id: int) -> dict:
     """Sync today's data, close today's loop, then plan tomorrow, for `user_id`.
 
@@ -122,6 +142,12 @@ def _run_nightly_for_user(user_id: int) -> dict:
     ensure_migrated()
     sync_today(user_id)
     today = _today_for_user(user_id)
+    try:
+        cleanup_stale_adaptations(user_id, today)
+    except Exception:
+        # Cleanup is housekeeping, not the plan itself — a Garmin hiccup here
+        # must not stop tonight's session from being planned.
+        log.warning("adaptation cleanup failed for user %s", user_id, exc_info=True)
     # Close today's loop first (session is done by 21:00), then plan tomorrow.
     reconcile_day(user_id, today)
     report = run_agent(user_id, today)

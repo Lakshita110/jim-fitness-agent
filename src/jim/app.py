@@ -294,15 +294,32 @@ class GarminWorkoutImportBody(BaseModel):
 @app.get("/api/garmin/workouts")
 def list_garmin_workouts_route(request: Request) -> dict:
     """The athlete's existing Garmin workout library, so the playbook editor
-    can offer 'import this one' instead of only hand-typed YAML/JSON."""
+    can offer 'import this one' instead of only hand-typed YAML/JSON.
+
+    Enriched with two flags the picker uses to declutter itself: `jim_created`
+    (this is a one-off adaptation Jim itself built for a single day — see the
+    "jim_created_workouts" kv entry written by coach._push_one, not a reusable
+    template) and `already_in_playbook` (it's already referenced by a template,
+    so re-importing it would be pointless)."""
     user = _require_user(request)
     _ready()
+    from jim.db import kv_get
     from jim.tools.garmin import list_garmin_workouts
 
     try:
         workouts = list_garmin_workouts(user.id)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    created = kv_get(user.id, "jim_created_workouts") or {}
+    by_workout_id = {v["workout_id"]: (fd, v) for fd, v in created.items()}
+    pb = load_playbook(user.id)
+    for w in workouts:
+        hit = by_workout_id.get(w["workout_id"])
+        w["jim_created"] = hit is not None
+        w["for_date"] = hit[0] if hit else None
+        w["template_key"] = hit[1]["template_key"] if hit else None
+        w["already_in_playbook"] = pb.by_workout_id(w["workout_id"]) is not None
     return {"workouts": workouts}
 
 
@@ -313,25 +330,17 @@ def import_garmin_workout(body: GarminWorkoutImportBody, request: Request) -> di
     (see playbook.use_existing_workout)."""
     user = _require_user(request)
     _ready()
-    from jim.tools.garmin import get_garmin_workout_detail, parse_workout_to_template
+    from jim.playbook import promote_garmin_workout
 
     try:
-        raw = get_garmin_workout_detail(user.id, body.workout_id)
+        promote_garmin_workout(
+            user.id, body.workout_id, body.key, body.target,
+            label=body.label, add_to_rotation=body.add_to_rotation,
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    template = parse_workout_to_template(body.key, raw)
-    if body.label:
-        template.label = body.label
-
     pb = load_playbook(user.id)
-    if body.target == "pt_routines":
-        pb.pt_routines[body.key] = template
-    else:
-        pb.workouts[body.key] = template
-        if body.add_to_rotation and body.key not in pb.rotation:
-            pb.rotation.append(body.key)
-    save_playbook(user.id, pb)
     return {"ok": True, "playbook": pb.model_dump(mode="json")}
 
 
@@ -510,6 +519,7 @@ CHAT_PAGE = """<!doctype html><html><head>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
+  color-scheme: dark;
   --bg:#0F100D; --glass:rgba(255,255,255,.045); --glass-line:rgba(255,255,255,.09);
   --solid:#171812; --line:rgba(255,255,255,.08);
   --ink:#F2EFE7; --muted:#9A9C90;
@@ -550,11 +560,50 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .pb-close { color: var(--muted); background: none; border: none; font-size: 20px; cursor: pointer;
             font-family: inherit; line-height: 1; }
 .pb-close:hover { color: var(--ink); }
+.pb-view-toggle { background: none; border: 1px solid var(--glass-line); border-radius: 999px;
+             color: var(--muted); font-family: inherit; font-size: 11.5px; padding: 4px 12px;
+             cursor: pointer; }
+.pb-view-toggle:hover { color: var(--ink); }
 #pbText { flex: 1; min-height: 320px; resize: vertical; background: rgba(255,255,255,.04);
           border: 1px solid var(--glass-line); border-radius: 12px; color: var(--ink);
           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
           line-height: 1.5; padding: 12px; outline: none; }
 #pbText:focus { border-color: rgba(180,206,158,.5); }
+.pb-body { flex: 1; min-height: 320px; overflow-y: auto; display: flex; flex-direction: column;
+           gap: 18px; }
+.pb-section-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .04em; margin-bottom: 8px; }
+.pb-section-title-row { display: flex; align-items: center; justify-content: space-between;
+             margin-bottom: 8px; }
+.pb-section-title-row .pb-section-title { margin-bottom: 0; }
+.pb-rotation { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.pb-rot-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+             background: rgba(255,255,255,.03); border: 1px solid var(--glass-line);
+             border-radius: 8px; font-size: 12.5px; }
+.pb-rot-pos { color: var(--muted); width: 18px; flex-shrink: 0; }
+.pb-rot-label { flex: 1; color: var(--ink); }
+.pb-rot-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+             font-family: inherit; font-size: 13px; padding: 2px 6px; line-height: 1; }
+.pb-rot-btn:hover:not(:disabled) { color: var(--ink); }
+.pb-rot-btn:disabled { opacity: .3; cursor: default; }
+.pb-rot-empty { font-size: 12.5px; color: var(--muted); padding: 6px 2px; }
+.pb-rotation-add .gw-select { flex: 0 1 260px; }
+.pb-directives-tabs { display: flex; gap: 4px; }
+.pb-dtab { background: none; border: 1px solid var(--glass-line); border-radius: 999px;
+             color: var(--muted); font-family: inherit; font-size: 11px; padding: 3px 10px;
+             cursor: pointer; }
+.pb-dtab.active { color: var(--ink); border-color: rgba(180,206,158,.5); }
+.pb-directives-edit { width: 100%; min-height: 160px; resize: vertical; background: rgba(255,255,255,.04);
+             border: 1px solid var(--glass-line); border-radius: 12px; color: var(--ink);
+             font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+             line-height: 1.5; padding: 12px; outline: none; }
+.pb-directives-edit:focus { border-color: rgba(180,206,158,.5); }
+.pb-directives-preview { min-height: 160px; background: rgba(255,255,255,.03);
+             border: 1px solid var(--glass-line); border-radius: 12px; color: var(--ink);
+             font-size: 13px; line-height: 1.6; padding: 12px; white-space: pre-wrap; }
+.pb-directives-preview strong { font-weight: 700; }
+.pb-directives-preview strong.md-h { display: block; margin: 2px 0 5px; font-size: 11px;
+             font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--data); }
 .pb-foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .pb-save { padding: 10px 20px; border: none; border-radius: 999px;
            background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
@@ -563,9 +612,17 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .pb-msg { font-size: 12.5px; color: var(--muted); }
 .pb-msg.err { color: var(--warn); }
 .pb-msg.ok { color: var(--sage); }
-.pb-import { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px;
+.pb-import-details { margin-bottom: 10px; }
+.pb-import-details summary { cursor: pointer; font-size: 12.5px; color: var(--muted);
+             padding: 6px 2px; list-style: none; }
+.pb-import-details summary::-webkit-details-marker { display: none; }
+.pb-import-details summary::before { content: "+ "; color: var(--sage); }
+.pb-import-details[open] summary::before { content: "− "; }
+.pb-import-details summary:hover { color: var(--ink); }
+.pb-import { display: flex; flex-direction: column; gap: 8px; margin-top: 6px;
              padding: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--glass-line);
              border-radius: 12px; }
+.pb-import-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .pb-import select, .pb-import input[type="text"] { background: rgba(255,255,255,.04);
              border: 1px solid var(--glass-line); border-radius: 8px; color: var(--ink);
              font-family: inherit; font-size: 12px; padding: 6px 8px; }
@@ -576,6 +633,18 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
              background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
              font-weight: 600; font-size: 12px; font-family: inherit; cursor: pointer; }
 .pb-import-btn:disabled { opacity: .5; cursor: default; }
+.gw-select { position: relative; flex: 1 1 220px; min-width: 160px; }
+.gw-select-btn { width: 100%; text-align: left; background: rgba(255,255,255,.04);
+             border: 1px solid var(--glass-line); border-radius: 8px; color: var(--ink);
+             font-family: inherit; font-size: 12px; padding: 6px 8px; cursor: pointer; }
+.gw-select-btn.placeholder { color: var(--muted); }
+.gw-select-list { display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+             max-height: 260px; overflow-y: auto; background: #23281d; border: 1px solid var(--glass-line);
+             border-radius: 8px; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.gw-select-list.open { display: block; }
+.gw-select-opt { padding: 7px 10px; font-size: 12px; color: var(--ink); cursor: pointer; }
+.gw-select-opt:hover, .gw-select-opt.hl { background: rgba(255,255,255,.08); }
+.gw-select-tag { color: var(--muted); font-size: 11px; }
 
 .main { flex: 1; display: flex; min-height: 0; position: relative; }
 .chat-col { flex: 1 1 58%; min-width: 0; display: flex; flex-direction: column;
@@ -773,19 +842,55 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
   <div class="pb-panel">
     <div class="pb-head">
       <div class="pb-title">Playbook</div>
+      <button type="button" class="pb-view-toggle" id="pbViewToggle">Edit as JSON</button>
       <button type="button" class="pb-close" id="pbClose" aria-label="Close">&times;</button>
     </div>
-    <div class="pb-import">
-      <select id="pbGarminSelect"><option value="">Loading Garmin workouts…</option></select>
-      <input id="pbImportKey" type="text" placeholder="key (e.g. full_body_d)" />
-      <select id="pbImportTarget">
-        <option value="workouts">base rotation</option>
-        <option value="pt_routines">PT routine</option>
-      </select>
-      <label class="pb-import-rot"><input id="pbAddToRotation" type="checkbox" /> add to rotation</label>
-      <button type="button" class="pb-import-btn" id="pbImportBtn">Import</button>
+    <details class="pb-import-details">
+      <summary>Import a workout from Garmin</summary>
+      <div class="pb-import">
+        <div class="pb-import-row">
+          <div class="gw-select" id="pbGarminSelect">
+            <button type="button" class="gw-select-btn placeholder" id="pbGarminSelectBtn">Loading Garmin workouts…</button>
+            <div class="gw-select-list" id="pbGarminSelectList"></div>
+          </div>
+          <input id="pbImportKey" type="text" placeholder="key (e.g. full_body_d)" />
+          <select id="pbImportTarget">
+            <option value="workouts">base rotation</option>
+            <option value="pt_routines">PT routine</option>
+          </select>
+        </div>
+        <div class="pb-import-row">
+          <label class="pb-import-rot"><input id="pbAddToRotation" type="checkbox" /> add to rotation</label>
+          <label class="pb-import-rot"><input id="pbShowAdaptations" type="checkbox" /> show my one-off adaptations too</label>
+          <button type="button" class="pb-import-btn" id="pbImportBtn">Import</button>
+        </div>
+      </div>
+    </details>
+    <div class="pb-body" id="pbStructured">
+      <div class="pb-section">
+        <div class="pb-section-title">Rotation</div>
+        <div class="pb-rotation" id="pbRotation"></div>
+        <div class="pb-rotation-add">
+          <div class="gw-select" id="pbRotAddSelect">
+            <button type="button" class="gw-select-btn placeholder" id="pbRotAddBtn">add existing workout…</button>
+            <div class="gw-select-list" id="pbRotAddList"></div>
+          </div>
+        </div>
+      </div>
+      <div class="pb-section">
+        <div class="pb-section-title-row">
+          <div class="pb-section-title">Directives</div>
+          <div class="pb-directives-tabs">
+            <button type="button" class="pb-dtab active" id="pbDirEditTab">Edit</button>
+            <button type="button" class="pb-dtab" id="pbDirPreviewTab">Preview</button>
+          </div>
+        </div>
+        <textarea id="pbDirectives" class="pb-directives-edit" spellcheck="false"
+                  placeholder="Standing instructions — gym constraints, joint/body constraints, anything not representable in a Garmin workout."></textarea>
+        <div id="pbDirectivesPreview" class="pb-directives-preview" hidden></div>
+      </div>
     </div>
-    <textarea id="pbText" spellcheck="false"></textarea>
+    <textarea id="pbText" spellcheck="false" hidden></textarea>
     <div class="pb-foot">
       <button type="button" class="pb-save" id="pbSave">Save</button>
       <span class="pb-msg" id="pbMsg"></span>
@@ -1183,32 +1288,192 @@ async function openPlaybook() {
     const text = await r.text();
     if (!r.ok) { pbSetMsg("Couldn't load playbook", "err"); return; }
     pbText.value = text; pbSetMsg("");
+    setPbData(JSON.parse(text));
   } catch { pbSetMsg("network error", "err"); }
   loadGarminWorkouts();
 }
 document.getElementById("playbookLink").addEventListener("click", (e) => { e.preventDefault(); openPlaybook(); });
 
+/* --- structured editor: one in-memory model (pbData), two views ---
+   pbData is the source of truth. Structured edits mutate it and immediately
+   re-serialize into pbText, so the raw-JSON toggle always reflects the
+   latest state either view produced. */
+let pbData = null;
+const pbStructured = document.getElementById("pbStructured");
+const pbViewToggle = document.getElementById("pbViewToggle");
+const pbRotation = document.getElementById("pbRotation");
+const pbRotAddBtn = document.getElementById("pbRotAddBtn");
+const pbRotAddList = document.getElementById("pbRotAddList");
+const pbDirectives = document.getElementById("pbDirectives");
+const pbDirectivesPreview = document.getElementById("pbDirectivesPreview");
+const pbDirEditTab = document.getElementById("pbDirEditTab"), pbDirPreviewTab = document.getElementById("pbDirPreviewTab");
+let pbRotAddKey = "";
+
+function setPbData(data) {
+  pbData = data;
+  pbData.rotation = pbData.rotation || [];
+  pbData.workouts = pbData.workouts || {};
+  pbData.directives = pbData.directives || "";
+  renderRotation();
+  pbDirectives.value = pbData.directives;
+  renderDirectivesPreview();
+}
+function syncPbText() { pbText.value = JSON.stringify(pbData, null, 2); }
+
+function renderRotation() {
+  const rot = pbData.rotation;
+  if (!rot.length) {
+    pbRotation.innerHTML = '<div class="pb-rot-empty">Nothing in rotation yet — add an imported workout below.</div>';
+  } else {
+    pbRotation.innerHTML = rot.map((key, i) => {
+      const label = (pbData.workouts[key] && pbData.workouts[key].label) || key;
+      return `<div class="pb-rot-row" data-key="${esc(key)}">
+        <span class="pb-rot-pos">${i + 1}.</span>
+        <span class="pb-rot-label">${esc(label)}</span>
+        <button type="button" class="pb-rot-btn" data-act="up" ${i === 0 ? "disabled" : ""}>&uarr;</button>
+        <button type="button" class="pb-rot-btn" data-act="down" ${i === rot.length - 1 ? "disabled" : ""}>&darr;</button>
+        <button type="button" class="pb-rot-btn" data-act="rm">&times;</button>
+      </div>`;
+    }).join("");
+  }
+  renderRotAddOptions();
+}
+pbRotation.addEventListener("click", (e) => {
+  const btn = e.target.closest(".pb-rot-btn");
+  if (!btn) return;
+  const row = btn.closest(".pb-rot-row");
+  const key = row.dataset.key;
+  const i = pbData.rotation.indexOf(key);
+  if (btn.dataset.act === "rm") {
+    pbData.rotation.splice(i, 1);
+  } else if (btn.dataset.act === "up" && i > 0) {
+    [pbData.rotation[i - 1], pbData.rotation[i]] = [pbData.rotation[i], pbData.rotation[i - 1]];
+  } else if (btn.dataset.act === "down" && i < pbData.rotation.length - 1) {
+    [pbData.rotation[i + 1], pbData.rotation[i]] = [pbData.rotation[i], pbData.rotation[i + 1]];
+  }
+  renderRotation();
+  syncPbText();
+});
+function renderRotAddOptions() {
+  const candidates = Object.keys(pbData.workouts).filter(k => !pbData.rotation.includes(k));
+  pbRotAddKey = "";
+  pbRotAddBtn.textContent = "add existing workout…"; pbRotAddBtn.classList.add("placeholder");
+  if (!candidates.length) {
+    pbRotAddList.innerHTML = '<div class="gw-select-opt">'
+      + (Object.keys(pbData.workouts).length
+         ? "everything's already in rotation"
+         : "nothing imported yet — use the Garmin picker above")
+      + '</div>';
+    return;
+  }
+  pbRotAddList.innerHTML = candidates.map(k =>
+    `<div class="gw-select-opt" data-key="${esc(k)}">${esc(pbData.workouts[k].label || k)}</div>`
+  ).join("");
+}
+pbRotAddBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  pbRotAddList.classList.toggle("open");
+});
+pbRotAddList.addEventListener("click", (e) => {
+  const opt = e.target.closest(".gw-select-opt");
+  if (!opt || !opt.dataset.key) return;
+  pbData.rotation.push(opt.dataset.key);
+  pbRotAddList.classList.remove("open");
+  renderRotation();
+  syncPbText();
+});
+document.addEventListener("click", () => pbRotAddList.classList.remove("open"));
+
+function renderDirectivesPreview() { pbDirectivesPreview.innerHTML = renderMD(pbData.directives || "(nothing yet)"); }
+pbDirectives.addEventListener("input", () => {
+  pbData.directives = pbDirectives.value;
+  syncPbText();
+});
+function showDirectivesTab(edit) {
+  pbDirEditTab.classList.toggle("active", edit);
+  pbDirPreviewTab.classList.toggle("active", !edit);
+  pbDirectives.hidden = !edit;
+  pbDirectivesPreview.hidden = edit;
+  if (!edit) renderDirectivesPreview();
+}
+pbDirEditTab.addEventListener("click", () => showDirectivesTab(true));
+pbDirPreviewTab.addEventListener("click", () => showDirectivesTab(false));
+
+pbViewToggle.addEventListener("click", () => {
+  const showingRaw = !pbText.hidden;
+  if (showingRaw) {
+    try {
+      setPbData(JSON.parse(pbText.value));
+    } catch {
+      pbSetMsg("that's not valid JSON — fix it before switching views", "err");
+      return;
+    }
+    pbText.hidden = true; pbStructured.hidden = false;
+    pbViewToggle.textContent = "Edit as JSON";
+  } else {
+    syncPbText();
+    pbStructured.hidden = true; pbText.hidden = false;
+    pbViewToggle.textContent = "Structured";
+  }
+});
+
 /* --- import an existing Garmin workout into the playbook --- */
-const pbGarminSelect = document.getElementById("pbGarminSelect"), pbImportBtn = document.getElementById("pbImportBtn");
+const pbGarminSelectBtn = document.getElementById("pbGarminSelectBtn");
+const pbGarminSelectList = document.getElementById("pbGarminSelectList");
+const pbImportBtn = document.getElementById("pbImportBtn");
 const pbImportKey = document.getElementById("pbImportKey"), pbImportTarget = document.getElementById("pbImportTarget");
 const pbAddToRotation = document.getElementById("pbAddToRotation");
+const pbShowAdaptations = document.getElementById("pbShowAdaptations");
+let pbGarminWorkoutId = "";
+let pbAllWorkouts = [];
+function gwSetPlaceholder(text) {
+  pbGarminSelectBtn.textContent = text; pbGarminSelectBtn.classList.add("placeholder");
+  pbGarminWorkoutId = ""; pbGarminSelectList.innerHTML = ""; pbGarminSelectList.classList.remove("open");
+}
+function renderGarminOptions() {
+  // Already-imported templates are never worth re-importing; one-off
+  // adaptations Jim built for a single day are hidden unless asked for,
+  // since they clutter the picker with dupes like "Full Body A (modified)".
+  const visible = pbAllWorkouts.filter(w =>
+    !w.already_in_playbook && (pbShowAdaptations.checked || !w.jim_created)
+  );
+  if (!visible.length) { gwSetPlaceholder("No Garmin workouts found"); return; }
+  gwSetPlaceholder("Select a Garmin workout…");
+  pbGarminSelectList.innerHTML = visible.map(w => {
+    const name = (w.name || "(untitled)").replace(/"/g, "&quot;");
+    const tag = w.jim_created ? ` <span class="gw-select-tag">adapted ${esc(w.for_date || "")}</span>` : "";
+    return `<div class="gw-select-opt" data-id="${w.workout_id}" data-name="${name}" data-template-key="${w.template_key || ""}">${esc(w.name || "(untitled)")}${tag}</div>`;
+  }).join("");
+}
 async function loadGarminWorkouts() {
-  pbGarminSelect.innerHTML = '<option value="">Loading Garmin workouts…</option>';
+  gwSetPlaceholder("Loading Garmin workouts…");
   try {
     const r = await fetch("/api/garmin/workouts");
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      pbGarminSelect.innerHTML = `<option value="">${data.detail || "Couldn't load Garmin workouts"}</option>`;
-      return;
-    }
-    const workouts = data.workouts || [];
-    if (!workouts.length) { pbGarminSelect.innerHTML = '<option value="">No Garmin workouts found</option>'; return; }
-    pbGarminSelect.innerHTML = '<option value="">Select a Garmin workout…</option>' +
-      workouts.map(w => `<option value="${w.workout_id}">${w.name || "(untitled)"}</option>`).join("");
-  } catch { pbGarminSelect.innerHTML = '<option value="">network error</option>'; }
+    if (!r.ok) { gwSetPlaceholder(data.detail || "Couldn't load Garmin workouts"); return; }
+    pbAllWorkouts = data.workouts || [];
+    renderGarminOptions();
+  } catch { gwSetPlaceholder("network error"); }
 }
+pbShowAdaptations.addEventListener("change", renderGarminOptions);
+pbGarminSelectBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  pbGarminSelectList.classList.toggle("open");
+});
+pbGarminSelectList.addEventListener("click", (e) => {
+  const opt = e.target.closest(".gw-select-opt");
+  if (!opt) return;
+  pbGarminWorkoutId = opt.dataset.id;
+  pbGarminSelectBtn.textContent = opt.dataset.name;
+  pbGarminSelectBtn.classList.remove("placeholder");
+  pbGarminSelectList.classList.remove("open");
+  if (opt.dataset.templateKey && !pbImportKey.value.trim()) {
+    pbImportKey.value = opt.dataset.templateKey;
+  }
+});
+document.addEventListener("click", () => pbGarminSelectList.classList.remove("open"));
 pbImportBtn.addEventListener("click", async () => {
-  const workout_id = pbGarminSelect.value, key = pbImportKey.value.trim();
+  const workout_id = pbGarminWorkoutId, key = pbImportKey.value.trim();
   if (!workout_id) { pbSetMsg("pick a Garmin workout first", "err"); return; }
   if (!key) { pbSetMsg("give it a playbook key", "err"); return; }
   pbImportBtn.disabled = true; pbSetMsg("Importing…");
@@ -1219,8 +1484,10 @@ pbImportBtn.addEventListener("click", async () => {
       }) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { pbSetMsg(data.error || data.detail || "import failed", "err"); return; }
-    pbText.value = JSON.stringify(data.playbook, null, 2);
+    setPbData(data.playbook);
+    syncPbText();
     pbSetMsg("Imported", "ok");
+    loadGarminWorkouts();  // the imported one is now already_in_playbook
   } catch { pbSetMsg("network error", "err"); }
   finally { pbImportBtn.disabled = false; }
 });
@@ -1253,6 +1520,7 @@ LOGIN_PAGE = """<!doctype html><html><head>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
+  color-scheme: dark;
   --bg:#0F100D; --glass:rgba(255,255,255,.045); --glass-line:rgba(255,255,255,.09);
   --solid:#171812; --line:rgba(255,255,255,.08);
   --ink:#F2EFE7; --muted:#9A9C90;
@@ -1390,6 +1658,7 @@ GARMIN_PAGE = """<!doctype html><html><head>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
+  color-scheme: dark;
   --bg:#0F100D; --glass:rgba(255,255,255,.045); --glass-line:rgba(255,255,255,.09);
   --solid:#171812; --line:rgba(255,255,255,.08);
   --ink:#F2EFE7; --muted:#9A9C90;

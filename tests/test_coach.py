@@ -47,6 +47,7 @@ class Fakes:
         self.scheduled: list = []
         self.cleared: list = []
         self.created: list = []
+        self.deleted: list = []
         self.recorded: list = []
         self.lookups = lookups or {}
         self.state: dict = {"features": {"as_of": TODAY.isoformat(),
@@ -79,6 +80,7 @@ class Fakes:
             schedule_workout=lambda wid, on: self.scheduled.append((wid, on)),
             clear_schedule=lambda on: self.cleared.append(on),
             create_garmin_workout=create,
+            delete_garmin_workout=lambda wid: self.deleted.append(wid),
             record_suggestion=record,
             playbook_text=lambda: "PLAYBOOK-BLOCK",
             now=lambda: NOW,
@@ -208,6 +210,45 @@ def test_adapted_template_day_pushes_the_edits_not_the_stock_workout():
     assert f.scheduled == [("9999", date(2026, 7, 9))]
     assert ("1414012813", date(2026, 7, 9)) not in f.scheduled
     assert "created + scheduled" in summary
+
+
+def test_adaptation_gets_a_deterministic_title_and_is_tracked_for_cleanup():
+    """The Garmin-side title is never left to the model — it's a fixed
+    "<template label> — adapted <date>" so provenance is visible on the watch
+    and in Garmin Connect, and the kv "jim_created_workouts" entry is how the
+    nightly sweep (and the import picker's dedup) later finds it."""
+    f = Fakes()
+    f.kv["draft"] = [
+        day("2026-07-09", title="Full Body A (knee-friendly)",
+            garmin_workout_id="1414012813", template_key="full_body_a",
+            steps=[{"exercise": "Goblet squat", "sets": 3, "reps": 12,
+                    "duration_sec": None, "weight_kg": 16, "notes": ""},
+                   {"exercise": "Leg press", "sets": 3, "reps": 10,
+                    "duration_sec": None, "weight_kg": 40, "notes": ""}]),
+    ]
+    approve(1, f.deps())
+    assert f.created[0].title == "Full Body A — adapted 2026-07-09"
+    tracked = f.kv["jim_created_workouts"]["2026-07-09"]
+    assert tracked == {"workout_id": "9999", "template_key": "full_body_a",
+                       "created_ts": NOW.isoformat()}
+
+
+def test_repushing_an_adaptation_deletes_the_prior_one_off():
+    """Re-adapting the same date must not leave the earlier Garmin workout
+    orphaned — it's deleted before the replacement is created."""
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-09", title="Custom A", steps=[
+        {"exercise": "Bench press", "sets": 3, "reps": 8,
+         "duration_sec": None, "weight_kg": 40, "notes": ""}])]
+    push_day("2026-07-09", 1, f.deps())
+    first_id = f.kv["jim_created_workouts"]["2026-07-09"]["workout_id"]
+
+    f.kv["draft"] = [day("2026-07-09", title="Custom A v2", steps=[
+        {"exercise": "Overhead press", "sets": 3, "reps": 8,
+         "duration_sec": None, "weight_kg": 20, "notes": ""}])]
+    push_day("2026-07-09", 1, f.deps())
+    assert f.deleted == [first_id]
+    assert len(f.created) == 2  # both one-offs were built
 
 
 def test_untouched_template_day_still_schedules_by_id():
@@ -342,6 +383,33 @@ def test_failed_lookup_does_not_kill_the_turn():
     assert "lookup failed" in tool_msgs[0]["content"]
 
 
+def test_model_can_call_promote_workout_to_playbook():
+    """The model-callable side of promotion (coach.py's tool wiring) — the
+    actual persistence is playbook.promote_garmin_workout, tested separately
+    in test_multi_user_isolation.py."""
+    calls = []
+
+    def fake_promote(for_date, key, target="workouts", add_to_rotation=False):
+        calls.append((for_date, key, target, add_to_rotation))
+        return f"Saved {for_date}'s adaptation as the new '{key}' template (Full Body A)."
+
+    f = Fakes(
+        llm_outputs=[
+            {"content": None, "tool_calls": [
+                {"id": "c1", "name": "promote_workout_to_playbook",
+                 "arguments": json.dumps({"for_date": "2026-07-09", "key": "full_body_a"})},
+            ]},
+            {"reply": "Done — that's your new Full Body A.", "draft": None, "goals": None},
+        ],
+        lookups={"promote_workout_to_playbook": fake_promote},
+    )
+    out = converse("make yesterday's session my new Full Body A", 1, f.deps())
+    assert calls == [("2026-07-09", "full_body_a", "workouts", False)]
+    assert "new Full Body A" in out["reply"]
+    tool_msgs = [m for m in f.llm_calls[1] if m.get("role") == "tool"]
+    assert "Saved 2026-07-09" in tool_msgs[0]["content"]
+
+
 def test_tool_budget_forces_final_answer():
     ask_again = {"content": None, "tool_calls": [
         {"id": "c1", "name": "workout_history", "arguments": "{}"},
@@ -433,6 +501,7 @@ def _calendar_deps(kv: dict, kv_set_calls: list | None = None) -> CoachDeps:
         schedule_workout=lambda *a, **k: None,
         clear_schedule=lambda *a, **k: None,
         create_garmin_workout=lambda s: None,
+        delete_garmin_workout=lambda wid: None,
         record_suggestion=lambda *a, **kw: 1,
         playbook_text=lambda: "",
         now=lambda: NOW,

@@ -661,6 +661,15 @@ def schedule_workout(user_id: int, workout_id: str, on: date) -> None:
     log.info("scheduled workout %s for %s", workout_id, on)
 
 
+def delete_garmin_workout(user_id: int, workout_id: str) -> None:
+    """Remove a one-off adaptation from the athlete's workout library once
+    it's no longer needed (superseded by a repush, or its day has passed
+    unpromoted). See jim_created_workouts tracking in coach.py/jobs/nightly.py."""
+    api = client(user_id)
+    api.delete_workout(workout_id)
+    log.info("deleted garmin workout %s", workout_id)
+
+
 def get_scheduled_workouts(user_id: int, start: date, end: date) -> list[dict]:
     """Workouts already on the real Garmin calendar in [start, end], for the
     draft-sync (a user who scheduled directly in Garmin Connect, or before ever

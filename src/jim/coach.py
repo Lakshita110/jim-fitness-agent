@@ -2,10 +2,14 @@
 plan for tomorrow or the week, keep long-term goals in plain language, and
 push to Garmin only on explicit approve.
 
-The model can LOOK THINGS UP mid-turn (bounded to MAX_TOOL_ROUNDS):
-per-exercise performance history from the watch (checked before prescribing
-weights), recent workout/adherence history, and research (curated corpus +
-web). Lookups happen inside a turn and are not persisted to chat history.
+The model can call TOOLS mid-turn (bounded to MAX_TOOL_ROUNDS): read-only
+lookups — per-exercise performance history from the watch (checked before
+prescribing weights), recent workout/adherence history, and research (curated
+corpus + web) — plus one mutating action, promote_workout_to_playbook, which
+saves an already-pushed adaptation as a new permanent playbook default when
+the athlete explicitly asks for it (see playbook.promote_garmin_workout). The
+tool round-trip itself isn't persisted to chat history — the model's own reply
+is the durable record of what it did, so it must say so in plain language.
 
 State is deliberately simple — everything lives in the kv store:
 - 'chat_history': last HISTORY_LIMIT messages [{role, content}]
@@ -44,7 +48,8 @@ DRAFT_MAX_DAYS = 7
 MAX_REPLY_CHARS = 3800
 MAX_TOOL_ROUNDS = 4  # lookup rounds per turn — keeps cost bounded
 
-# Lookups the model may call mid-conversation (OpenAI function schemas).
+# Tools the model may call mid-conversation (OpenAI function schemas) — the
+# first three are read-only lookups, the last is a mutating action.
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -82,6 +87,31 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {"question": {"type": "string"}},
                 "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "promote_workout_to_playbook",
+            "description": "Save a day's already-pushed adaptation as a new permanent"
+            " playbook default (e.g. 'make this my new Full Body A'). Only call this"
+            " when the athlete EXPLICITLY asks to keep an adapted session as their new"
+            " default — never on your own initiative. The day must already be on"
+            " Garmin (pushed from the draft) before this works.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "for_date": {"type": "string",
+                                 "description": "YYYY-MM-DD of the pushed adaptation"},
+                    "key": {"type": "string",
+                            "description": "playbook key, e.g. 'full_body_a'"},
+                    "target": {"type": "string", "enum": ["workouts", "pt_routines"],
+                               "description": "base rotation or PT routine; default workouts"},
+                    "add_to_rotation": {"type": "boolean",
+                                        "description": "also add this key to the A/B/C rotation"},
+                },
+                "required": ["for_date", "key"],
             },
         },
     },
@@ -145,6 +175,15 @@ any weight or rep target and progress conservatively from what was actually done
 one). Call workout_history for what recently happened; call research for
 pain-driven substitutions and cite the sources in your reply.
 
+PROMOTING AN ADAPTATION: an adapted day you push builds a one-off Garmin
+workout — it's disposable, not a default, until made one. If (and ONLY if)
+the athlete explicitly asks to keep an already-pushed adaptation as their new
+default (e.g. "make this my new Full Body A", "let's lock this in"), call
+promote_workout_to_playbook with that day's date and a playbook key. Never
+call it on your own initiative, never for a day that hasn't been pushed yet,
+and always confirm in your reply exactly what you changed — that reply is the
+only durable record of the action.
+
 Today is {today}. Respond ONLY with a JSON object:
 {{"reply": str,                      # chat message; light markdown ok (**bold**, "- " bullets,
                                      # "## " headings) for anything structured like a weekly
@@ -172,6 +211,7 @@ class CoachDeps:
     schedule_workout: Callable[..., None]
     clear_schedule: Callable[..., None]  # unschedule planned workouts on a date
     create_garmin_workout: Callable[..., Any]
+    delete_garmin_workout: Callable[[str], None]
     record_suggestion: Callable[..., int]
     playbook_text: Callable[[], str]
     now: Callable[[], datetime]
@@ -263,6 +303,25 @@ class CoachDeps:
             hits = research_training(question)
             return "\n".join(f"[{h.source}] {h.title}: {h.snippet}" for h in hits) or "(no hits)"
 
+        def promote_workout_to_playbook(
+            for_date: str, key: str, target: str = "workouts",
+            add_to_rotation: bool = False,
+        ) -> str:
+            from jim.playbook import promote_garmin_workout
+
+            created = kv_get(user_id, "jim_created_workouts") or {}
+            entry = created.get(for_date)
+            if not entry:
+                return (
+                    f"No one-off adaptation on file for {for_date} — it may not have"
+                    " been pushed to Garmin yet, or it was already promoted."
+                )
+            template = promote_garmin_workout(
+                user_id, entry["workout_id"], key, target,
+                add_to_rotation=add_to_rotation,
+            )
+            return f"Saved {for_date}'s adaptation as the new '{key}' template ({template.label})."
+
         return cls(
             kv_get=lambda key: kv_get(user_id, key),
             kv_set=lambda key, value: kv_set(user_id, key, value),
@@ -272,10 +331,12 @@ class CoachDeps:
                 "exercise_history": lambda exercise: exercise_history(user_id, exercise),
                 "workout_history": lambda days=14: workout_history(user_id, days),
                 "research": research,
+                "promote_workout_to_playbook": promote_workout_to_playbook,
             },
             schedule_workout=lambda wid, on: garmin.schedule_workout(user_id, wid, on),
             clear_schedule=lambda on: garmin.clear_schedule(user_id, on),
             create_garmin_workout=lambda s: garmin.create_garmin_workout(user_id, s),
+            delete_garmin_workout=lambda wid: garmin.delete_garmin_workout(user_id, wid),
             record_suggestion=lambda *a, **kw: memory.record_suggestion(user_id, *a, **kw),
             playbook_text=lambda: load_playbook(user_id).to_prompt(),
             playbook=lambda: load_playbook(user_id),
@@ -444,14 +505,31 @@ def _push_status(deps: CoachDeps, sessions: list[StructuredSession]) -> dict[str
     return status
 
 
+def adaptation_title(template_label: str | None, for_date: date, fallback: str) -> str:
+    """Deterministic title for a one-off adaptation — never left to the model,
+    so provenance (this is disposable, not a real template) is visible both in
+    Jim's own Garmin-workout picker and in the native Garmin Connect app."""
+    base = template_label or fallback
+    return f"{base} — adapted {for_date.isoformat()}"
+
+
 def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
     """Schedule a single session on the watch and record it. Returns a summary line.
 
     An untouched template is scheduled by ID (its loaded weights live on Garmin,
     not here); anything the athlete adapted is built fresh from its steps. The
     steps are what they can see in the plan, so the steps are what must land on
-    the watch — see playbook.use_existing_workout."""
+    the watch — see playbook.use_existing_workout.
+
+    An adaptation always creates a brand-new Garmin workout (there's no update
+    path), so each one is tracked in the "jim_created_workouts" kv entry —
+    same shape/spirit as "pushed" in _mark_pushed — until it's either promoted
+    into the playbook (via the Garmin-import route) or swept by the nightly
+    cleanup once its day has passed. Re-pushing the same date deletes the
+    prior one-off first so the athlete's Garmin library doesn't accumulate
+    dupes ("Full Body A (modified)", "Full Body A (modified)", ...)."""
     fd = session.for_date
+    fd_iso = fd.isoformat()
     as_template = bool(
         session.kind != "rest"
         and session.garmin_workout_id  # short-circuits: no template ID, no playbook read
@@ -462,8 +540,29 @@ def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
     elif as_template:
         deps.schedule_workout(session.garmin_workout_id, fd)
     else:
-        ref = deps.create_garmin_workout(session)
+        created = deps.kv_get("jim_created_workouts") or {}
+        prior = created.get(fd_iso)
+        if prior:
+            try:
+                deps.delete_garmin_workout(prior["workout_id"])
+            except Exception:
+                log.warning("couldn't delete prior adaptation %s for %s",
+                            prior["workout_id"], fd_iso, exc_info=True)
+        template_label = None
+        if session.template_key:
+            wt = deps.playbook().template(session.template_key)
+            template_label = wt.label if wt else None
+        titled = session.model_copy(update={
+            "title": adaptation_title(template_label, fd, session.title),
+        })
+        ref = deps.create_garmin_workout(titled)
         deps.schedule_workout(ref.workout_id, fd)
+        created[fd_iso] = {
+            "workout_id": ref.workout_id,
+            "template_key": session.template_key,
+            "created_ts": deps.now().isoformat(),
+        }
+        deps.kv_set("jim_created_workouts", created)
     deps.record_suggestion(
         fd, session, session.rationale_summary, False, "fast", source="chat",
     )
@@ -535,8 +634,9 @@ def _loads_json(text: str) -> dict:
 
 
 def _run_model(deps: CoachDeps, system: str, history: list[dict]) -> dict:
-    """One model turn, with a bounded lookup loop: the model may call
-    exercise_history / workout_history / research before answering."""
+    """One model turn, with a bounded tool loop: the model may call
+    exercise_history / workout_history / research (read-only) or
+    promote_workout_to_playbook (mutating) before answering."""
     msgs = [{"role": "system", "content": system}, *history]
     for _ in range(MAX_TOOL_ROUNDS):
         resp = deps.llm(msgs, TOOL_SCHEMAS)

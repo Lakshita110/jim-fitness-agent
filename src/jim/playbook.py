@@ -218,8 +218,11 @@ def load_playbook(user_id: int) -> Playbook:
         ).fetchone()
     if row is None:
         return Playbook()  # safety net; a row should exist post-signup
-    workouts = {k: WorkoutTemplate(key=k, **v) for k, v in row["workouts"].items()}
-    pt_routines = {k: WorkoutTemplate(key=k, **v) for k, v in row["pt_routines"].items()}
+    # A saved template's JSON already carries its own "key" (model_dump includes
+    # every field) — override rather than pass both, or WorkoutTemplate(key=k, **v)
+    # raises "multiple values for keyword argument 'key'".
+    workouts = {k: WorkoutTemplate(**{**v, "key": k}) for k, v in row["workouts"].items()}
+    pt_routines = {k: WorkoutTemplate(**{**v, "key": k}) for k, v in row["pt_routines"].items()}
     return Playbook(
         rotation=row["rotation"], workouts=workouts, pt_routines=pt_routines,
         directives=row["directives"],
@@ -246,6 +249,47 @@ def save_playbook(user_id: int, pb: Playbook) -> None:
             ),
         )
         conn.commit()
+
+
+def promote_garmin_workout(
+    user_id: int, workout_id: str, key: str, target: str = "workouts",
+    label: str | None = None, add_to_rotation: bool = False,
+) -> WorkoutTemplate:
+    """Pull a real Garmin workout in by id and save it into the playbook under
+    `key` — the one path (besides hand-editing raw JSON) that turns something
+    on the athlete's Garmin account into a durable default. Used by both the
+    /api/garmin/workouts/import route (human-driven, from the Playbook panel)
+    and coach.py's promote_workout_to_playbook tool (model-callable, from chat)
+    so the two surfaces can't drift apart.
+
+    Also clears the workout out of "jim_created_workouts" kv tracking if it's
+    there — once promoted it's a real template, not a one-off cleanup
+    candidate (see coach._push_one and jobs.nightly.cleanup_stale_adaptations)."""
+    from jim.db import kv_get, kv_set
+    from jim.tools.garmin import get_garmin_workout_detail, parse_workout_to_template
+
+    raw = get_garmin_workout_detail(user_id, workout_id)
+    template = parse_workout_to_template(key, raw)
+    if label:
+        template.label = label
+
+    pb = load_playbook(user_id)
+    if target == "pt_routines":
+        pb.pt_routines[key] = template
+    else:
+        pb.workouts[key] = template
+        if add_to_rotation and key not in pb.rotation:
+            pb.rotation.append(key)
+    save_playbook(user_id, pb)
+
+    created = kv_get(user_id, "jim_created_workouts") or {}
+    stale = [fd for fd, v in created.items() if v["workout_id"] == workout_id]
+    for fd in stale:
+        del created[fd]
+    if stale:
+        kv_set(user_id, "jim_created_workouts", created)
+
+    return template
 
 
 def _strip_html_comments(text: str) -> str:
