@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 
 import jim.app as app_mod
 import jim.db as db_mod
+import jim.web.garmin_routes as garmin_routes
+from jim import auth
 from jim.auth import User
+from jim.web import deps
 
 client = TestClient(app_mod.app)
 TEST_USER = User(id=7, email="mom@example.com")
@@ -18,11 +21,11 @@ TEST_USER = User(id=7, email="mom@example.com")
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    monkeypatch.setattr(app_mod, "_ready", lambda: None)
+    monkeypatch.setattr(deps, "_ready", lambda: None)
     client.cookies.clear()
     yield
     client.cookies.clear()
-    app_mod._pending_garmin_logins.clear()
+    garmin_routes._pending_garmin_logins.clear()
 
 
 def fake_settings():
@@ -30,9 +33,9 @@ def fake_settings():
 
 
 def _sign_in(monkeypatch, user=TEST_USER):
-    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: user)
+    monkeypatch.setattr(auth, "authenticate", lambda email, password: user)
     monkeypatch.setattr(
-        app_mod.auth, "get_user_by_id", lambda uid: user if uid == user.id else None
+        auth, "get_user_by_id", lambda uid: user if uid == user.id else None
     )
     r = client.post("/auth/login", json={"email": user.email, "password": "irrelevant"})
     assert r.status_code == 200, r.text

@@ -32,11 +32,12 @@ until you hit Push to Garmin**.
   pain read) and a persistent Plan panel — right column on desktop, bottom sheet
   on mobile. Replies render light markdown, so a weekly schedule comes back as a
   formatted list rather than raw asterisks.
-- **The nightly run's proposal appears as the WORKING PLAN card** when you
-  open the chat. Tweak it in conversation or just push it.
+- **Nothing is planned until you ask** — there's no overnight auto-draft.
+  Open the chat and say what you want ("plan tomorrow", "what should legs
+  look like this week?") and the WORKING PLAN card fills in from there.
 - **Iterate freely**: "swap Thursday to home PT", "make the week easier,
   knee's cranky", "plan the whole week around the 5k goal". Every draft is
-  run through the same hard guardrail as the nightly agent — forbidden
+  run through the same hard guardrail — forbidden
   movements, session length, Garmin's step cap, leg-day spacing. Days that
   break it get revised once, then dropped with a note; they are never pushed.
   There is **no weekly volume cap**: plan as many days as you want, as long as
@@ -48,7 +49,7 @@ until you hit Push to Garmin**.
   that date.
 - **Long-term goals**: say "my long-term goal is X" and Jim rewrites your
   goals block — stored durably, nothing scheduled. Goals are read by every
-  chat turn *and* every nightly run, so they shape plans continuously.
+  chat turn, so they shape plans continuously.
 - **Playbook panel**: a "Playbook" link next to the plan opens a JSON textarea
   (`GET`/`POST /api/playbook`) — your base workouts, PT routines, rotation, and
   standing directives, editable directly. Saves are all-or-nothing: a bad edit
@@ -66,7 +67,7 @@ until you hit Push to Garmin**.
   created then scheduled; a `rest` day clears the watch for that date. Re-pushing
   a day replaces the old one rather than duplicating it, and each day badges as
   **pushed** or **modified** (edited since it went to the watch). Days you plan
-  in chat are marked `source='chat'` and the nightly run **steps aside** for them.
+  in chat are marked `source='chat'`.
 
 ## Notion's role
 

@@ -49,9 +49,10 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# app.py embeds the chat page (HTML/CSS/JS) as one inline string — long
-# markup lines are expected and shouldn't be reflowed to satisfy E501.
-"src/jim/app.py" = ["E501"]
+# templates.py embeds the chat/login/Garmin pages (HTML/CSS/JS) as inline
+# strings — long markup lines are expected and shouldn't be reflowed to
+# satisfy E501.
+"src/jim/web/templates.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

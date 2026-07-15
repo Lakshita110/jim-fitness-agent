@@ -1,5 +1,11 @@
-"""Nightly job (~21:00 local): sync today's data into Postgres, reconcile, then
-plan tomorrow.
+"""Nightly job (~21:00 local): housekeeping only — sync today's data into
+Postgres, reconcile today's adherence, and sweep stale one-off Garmin
+adaptations. It does NOT plan tomorrow; the athlete gets plan edits by talking
+to the coach (see coach.py), not from an unsolicited draft written overnight.
+
+This still has to run nightly because coach.py's fetch_state() reads
+query_history/readiness_read, which read the tables sync_today fills — without
+this job, readiness/volume features and adherence tracking go stale.
 
 Two entrypoints, same work:
 - Vercel Cron -> GET /api/cron/nightly (see app.py), the deployed path.
@@ -12,7 +18,6 @@ import time
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from jim.agent.loop import run_agent
 from jim.config import settings
 from jim.db import connect, ensure_migrated
 
@@ -130,7 +135,8 @@ def cleanup_stale_adaptations(user_id: int, today: date) -> None:
 
 
 def _run_nightly_for_user(user_id: int) -> dict:
-    """Sync today's data, close today's loop, then plan tomorrow, for `user_id`.
+    """Sync today's data, sweep stale adaptations, and close today's loop, for
+    `user_id`. Housekeeping only — no plan is written here.
 
     Returns a summary (incl. elapsed seconds) so the caller can see how close the
     run is to a serverless timeout — this is invoked from Vercel Cron, where the
@@ -145,36 +151,22 @@ def _run_nightly_for_user(user_id: int) -> dict:
     try:
         cleanup_stale_adaptations(user_id, today)
     except Exception:
-        # Cleanup is housekeeping, not the plan itself — a Garmin hiccup here
-        # must not stop tonight's session from being planned.
+        # Cleanup is housekeeping, not the sync itself — a Garmin hiccup here
+        # must not stop today's reconcile from running.
         log.warning("adaptation cleanup failed for user %s", user_id, exc_info=True)
-    # Close today's loop first (session is done by 21:00), then plan tomorrow.
     reconcile_day(user_id, today)
-    report = run_agent(user_id, today)
     elapsed = round(time.monotonic() - started, 1)
-    log.info("nightly done in %ss: %s", elapsed, report)
-    return {
-        "for_date": report.for_date.isoformat(),
-        "suggestion_id": report.suggestion_id,
-        "tier": report.tier,
-        "research_used": report.research_used,
-        "tool_calls": report.tool_calls,
-        "fell_back": report.fell_back,
-        "elapsed_sec": elapsed,
-    }
+    log.info("nightly housekeeping done in %ss for user %s", elapsed, user_id)
+    return {"elapsed_sec": elapsed}
 
 
 def run_nightly() -> dict:
     """Fan out the nightly run over every nightly_enabled user.
 
     One user's failure (expired Garmin creds, Notion down despite the guard in
-    sync_today, an unhandled compose/validate error) is caught and logged right
-    here, at the per-user boundary — it must not stop the rest of the cron run.
-
-    Cost note: MAX_TOOL_CALLS / model-tier budgets (config.py) were sized for a
-    single run. With N nightly_enabled users this loop makes the nightly LLM
-    spend scale to N x per cron firing — fine at small N, worth revisiting if
-    the user base grows.
+    sync_today, a Garmin API hiccup during cleanup/reconcile) is caught and
+    logged right here, at the per-user boundary — it must not stop the rest of
+    the cron run.
     """
     started = time.monotonic()
     ensure_migrated()

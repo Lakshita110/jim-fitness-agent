@@ -9,17 +9,18 @@ garmin_strength, notion_schema). `PLAN.md` is the original design record.
 ## What Jim is
 
 A personal training agent, multi-tenant: each signed-up account connects its
-own Garmin, edits its own playbook, and gets its own nightly run. Nightly it
-reviews the day (Garmin + a read-only Notion habit/knee log), reasons about
-tomorrow within that athlete's knee/ankle constraints, and drops a proposal
-into **Jim's chat** — a self-hosted page where they iterate on the plan and
-push structured workouts to Garmin on approve.
+own Garmin, edits its own playbook, and gets its own nightly housekeeping run.
+Plans come from talking to **Jim's chat** — a self-hosted page where the
+athlete reasons with Jim about the next session within their knee/ankle
+constraints (using real Garmin + a read-only Notion habit/knee log) and pushes
+structured workouts to Garmin on approve. Nightly housekeeping just keeps that
+history fresh — it never writes a plan itself.
 Python 3.11+, FastAPI, Postgres, OpenRouter (via the `openai` SDK),
 `garminconnect`. No build step — the whole chat UI is one inline HTML string in
-`src/jim/app.py`.
+`src/jim/web/templates.py`.
 
 Work happens on `main` (github.com/Lakshita110/jim-fitness-agent).
-`AUTO_PUSH=False`: the nightly job is propose-only, and workouts reach the watch
+`AUTO_PUSH=False`: nothing auto-schedules — workouts reach the watch
 only through the chat's push buttons.
 
 ## Setup
@@ -101,7 +102,9 @@ sore today".
 
 ## Backlog
 
-- **M5 eval suite** (`evals/run_evals.py` is a scaffold) — needs live-compose
-  scenarios. Passing it is what would gate flipping `AUTO_PUSH` on.
+- **No eval suite gates `AUTO_PUSH` yet.** The old M5 scaffold
+  (`evals/run_evals.py`) tested the nightly auto-compose path, which no longer
+  exists — a chat-turn eval would need a different shape (one scenario per
+  conversation).
 - Readiness card loads once per page load rather than after every message.
   Fine in practice: load and recovery don't move within a session.

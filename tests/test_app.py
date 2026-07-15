@@ -4,7 +4,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import jim.app as app_mod
+from jim import auth, coach
 from jim.auth import User
+from jim.web import deps
 
 client = TestClient(app_mod.app)
 
@@ -22,7 +24,7 @@ def _fresh_session(monkeypatch):
     test. Left real, it calls db.ensure_migrated() -> connect(), which
     hard-raises without a live DATABASE_URL and turns every DB-backed route
     into a bare 500."""
-    monkeypatch.setattr(app_mod, "_ready", lambda: None)
+    monkeypatch.setattr(deps, "_ready", lambda: None)
     client.cookies.clear()
     yield
     client.cookies.clear()
@@ -37,9 +39,9 @@ def _sign_in(monkeypatch, c=client, user=TEST_USER):
     /auth/login route so the cookie is set the same way a browser's would be
     (TestClient's cookie jar only reliably tracks cookies it received via a
     Set-Cookie response header, not ones poked into the jar directly)."""
-    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: user)
+    monkeypatch.setattr(auth, "authenticate", lambda email, password: user)
     monkeypatch.setattr(
-        app_mod.auth, "get_user_by_id", lambda uid: user if uid == user.id else None
+        auth, "get_user_by_id", lambda uid: user if uid == user.id else None
     )
     r = c.post("/auth/login", json={"email": user.email, "password": "irrelevant"})
     assert r.status_code == 200, r.text
@@ -73,7 +75,7 @@ def test_login_page_is_public():
 def test_chat_message_flow(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     monkeypatch.setattr(
-        app_mod.coach, "converse",
+        coach, "converse",
         lambda text, user_id, scope_date=None: {
             "reply": f"echo: {text}", "draft": [], "scope": scope_date,
         },
@@ -94,12 +96,12 @@ def test_chat_message_flow(monkeypatch):
 def test_chat_approve_clear_state(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     monkeypatch.setattr(
-        app_mod.coach, "approve", lambda user_id: "Pushed to Garmin:\n2026-07-09: ok"
+        coach, "approve", lambda user_id: "Pushed to Garmin:\n2026-07-09: ok"
     )
     cleared = []
-    monkeypatch.setattr(app_mod.coach, "clear", lambda user_id: cleared.append(True))
+    monkeypatch.setattr(coach, "clear", lambda user_id: cleared.append(True))
     monkeypatch.setattr(
-        app_mod.coach, "current_state",
+        coach, "current_state",
         lambda user_id: {"history": [], "draft": [], "goals": "g", "push_status": {}},
     )
 
@@ -126,7 +128,7 @@ def test_chat_push_day(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     seen = {}
     monkeypatch.setattr(
-        app_mod.coach, "push_day",
+        coach, "push_day",
         lambda date, user_id: seen.update(date=date) or {
             "summary": f"Pushed {date}", "draft": [], "push_status": {date: "pushed"},
         },
@@ -183,10 +185,10 @@ def test_cron_nightly_shut_when_no_secret_configured(monkeypatch):
 
 def test_signup_creates_user_and_sets_cookie(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(app_mod.auth, "create_user", lambda email, password: TEST_USER)
+    monkeypatch.setattr(auth, "create_user", lambda email, password: TEST_USER)
     r = client.post("/auth/signup", json={"email": "athlete@example.com", "password": "hunter2"})
     assert r.status_code == 200 and r.json() == {"ok": True}
-    assert app_mod.auth.SESSION_COOKIE_NAME in r.cookies
+    assert auth.SESSION_COOKIE_NAME in r.cookies
 
 
 def test_signup_duplicate_email_returns_400_with_message(monkeypatch):
@@ -195,32 +197,32 @@ def test_signup_duplicate_email_returns_400_with_message(monkeypatch):
     def raise_dup(email, password):
         raise ValueError("an account with this email already exists")
 
-    monkeypatch.setattr(app_mod.auth, "create_user", raise_dup)
+    monkeypatch.setattr(auth, "create_user", raise_dup)
     r = client.post("/auth/signup", json={"email": "dup@example.com", "password": "x"})
     assert r.status_code == 400
     assert "already exists" in r.json()["detail"]
-    assert app_mod.auth.SESSION_COOKIE_NAME not in r.cookies
+    assert auth.SESSION_COOKIE_NAME not in r.cookies
 
 
 def test_login_success_sets_cookie(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: TEST_USER)
+    monkeypatch.setattr(auth, "authenticate", lambda email, password: TEST_USER)
     r = client.post("/auth/login", json={"email": "athlete@example.com", "password": "hunter2"})
     assert r.status_code == 200 and r.json() == {"ok": True}
-    assert app_mod.auth.SESSION_COOKIE_NAME in r.cookies
+    assert auth.SESSION_COOKIE_NAME in r.cookies
 
 
 def test_login_failure_is_generic_for_wrong_password_and_unknown_email(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: None)
+    monkeypatch.setattr(auth, "authenticate", lambda email, password: None)
 
     wrong_pw = client.post("/auth/login", json={"email": "athlete@example.com", "password": "bad"})
     unknown = client.post("/auth/login", json={"email": "ghost@example.com", "password": "x"})
 
     assert wrong_pw.status_code == 401 and unknown.status_code == 401
     assert wrong_pw.json() == unknown.json() == {"detail": "invalid email or password"}
-    assert app_mod.auth.SESSION_COOKIE_NAME not in wrong_pw.cookies
-    assert app_mod.auth.SESSION_COOKIE_NAME not in unknown.cookies
+    assert auth.SESSION_COOKIE_NAME not in wrong_pw.cookies
+    assert auth.SESSION_COOKIE_NAME not in unknown.cookies
 
 
 def test_logout_clears_cookie_and_subsequent_requests_are_unauthenticated(monkeypatch):
@@ -236,7 +238,7 @@ def test_logout_clears_cookie_and_subsequent_requests_are_unauthenticated(monkey
 
 def test_forged_cookie_resolves_to_unauthenticated_not_a_crash(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
-    client.cookies.set(app_mod.auth.SESSION_COOKIE_NAME, "not-a-real-token")
+    client.cookies.set(auth.SESSION_COOKIE_NAME, "not-a-real-token")
     r = client.get("/chat", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"  # bounced, no crash
     assert client.get("/chat/state").status_code == 403

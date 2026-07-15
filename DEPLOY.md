@@ -170,9 +170,10 @@ fetch both during install.
 
 ## ⚠️ The one thing to watch: the nightly timeout
 
-`maxDuration` is **60s** (the Hobby ceiling). The nightly run does a lot — Garmin
-sync (activities, sleep, HRV, per-activity exercise sets), reconcile, then the
-agent's LLM compose. **If it exceeds 60s it is killed mid-run**, and it'll happen
+`maxDuration` is **60s** (the Hobby ceiling). The nightly run is housekeeping
+only (no LLM call), but it still does real work per user — Garmin sync
+(activities, sleep, HRV, per-activity exercise sets), stale-adaptation cleanup,
+and reconcile. **If it exceeds 60s it is killed mid-run**, and it'll happen
 silently at 2am.
 
 The endpoint returns `elapsed_sec` precisely so you can watch this. After the
@@ -226,7 +227,7 @@ day; an earlier run would plan tomorrow before today finished.
 
 **"No pending Garmin login (or it expired) — start again"** on the
 `/settings/garmin/mfa` step — known limitation, not a security issue. The
-pending-MFA state (`_pending_garmin_logins` in `app.py`) lives in a
+pending-MFA state (`_pending_garmin_logins` in `web/garmin_routes.py`) lives in a
 process-local dict, and Vercel serverless gives no guarantee that the request
 carrying your MFA code lands on the same warm instance that issued the
 challenge. It's usually transient — retry `/settings/garmin/connect` from the

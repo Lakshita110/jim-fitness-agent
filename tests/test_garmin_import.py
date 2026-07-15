@@ -8,9 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import jim.app as app_mod
+import jim.web.playbook_routes as playbook_routes
+from jim import auth
 from jim.auth import User
 from jim.playbook import Playbook, WorkoutTemplate
 from jim.tools.garmin import list_garmin_workouts, parse_workout_to_template
+from jim.web import deps
 
 client = TestClient(app_mod.app)
 TEST_USER = User(id=7, email="athlete2@example.com")
@@ -18,7 +21,7 @@ TEST_USER = User(id=7, email="athlete2@example.com")
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    monkeypatch.setattr(app_mod, "_ready", lambda: None)
+    monkeypatch.setattr(deps, "_ready", lambda: None)
     monkeypatch.setattr(
         app_mod, "settings",
         lambda: SimpleNamespace(app_timezone="America/New_York", cron_secret="cr0n"),
@@ -29,9 +32,9 @@ def _fresh_session(monkeypatch):
 
 
 def _sign_in(monkeypatch, user=TEST_USER):
-    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: user)
+    monkeypatch.setattr(auth, "authenticate", lambda email, password: user)
     monkeypatch.setattr(
-        app_mod.auth, "get_user_by_id", lambda uid: user if uid == user.id else None
+        auth, "get_user_by_id", lambda uid: user if uid == user.id else None
     )
     r = client.post("/auth/login", json={"email": user.email, "password": "irrelevant"})
     assert r.status_code == 200, r.text
@@ -186,7 +189,7 @@ def test_route_flags_jim_created_and_already_in_playbook(monkeypatch):
     }}
     monkeypatch.setattr("jim.db.kv_get", lambda uid, key: kv.get((uid, key)))
     monkeypatch.setattr(
-        app_mod, "load_playbook",
+        playbook_routes, "load_playbook",
         lambda uid: Playbook(
             rotation=["a"],
             workouts={"a": WorkoutTemplate(key="a", label="Full Body A",
@@ -238,8 +241,8 @@ def test_successful_import_pops_the_kv_tracking_entry(monkeypatch):
     # promote_garmin_workout (jim.playbook) and this route both resolve
     # load_playbook/save_playbook as globals in their own module, so both
     # bindings need patching to share the same fake store.
-    monkeypatch.setattr(app_mod, "load_playbook", load)
-    monkeypatch.setattr(app_mod, "save_playbook", save)
+    monkeypatch.setattr(playbook_routes, "load_playbook", load)
+    monkeypatch.setattr(playbook_routes, "save_playbook", save)
     monkeypatch.setattr("jim.playbook.load_playbook", load)
     monkeypatch.setattr("jim.playbook.save_playbook", save)
     _sign_in(monkeypatch)

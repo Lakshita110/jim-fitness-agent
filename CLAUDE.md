@@ -2,36 +2,40 @@
 
 Jim is a personal training agent, now multi-tenant: any number of athletes can
 sign up with email + password, each connecting their own Garmin account and
-editing their own playbook. For each account, nightly it reviews what actually
-happened (Garmin + a read-only Notion habit/knee log), reasons about the next
-session within that athlete's knee/ankle constraints, and proposes a plan they
-iterate on in their own chat. Workouts reach the watch only when the athlete
-presses a button.
+editing their own playbook. Plans are built by talking to the coach in chat,
+which reasons about the next session within that athlete's knee/ankle
+constraints using real Garmin (+ a read-only Notion habit/knee log) history.
+Nightly housekeeping keeps that history fresh (syncs Garmin/Notion, reconciles
+the day, sweeps stale one-off workouts) but does not write a plan itself —
+there's no auto-draft while the athlete sleeps. Workouts reach the watch only
+when the athlete presses a button.
 
 Not a product. Real accounts, real isolation (`user_id`-scoped Postgres +
 `kv`), but still one deployment, one Postgres, one operator.
 
 ## The shape of it
 
-**One agent core, two entry points, one hard guardrail in front of the watch.**
+**One planning path (chat), one housekeeping cron, one hard guardrail in front of the watch.**
 
 ```
                     ┌── nightly cron ──┐
-                    │  jobs/nightly.py │──┐
-                    └──────────────────┘  │      ┌─────────────────┐
-                                          ├─────▶│  agent core     │
-                    ┌── the chat ──────┐  │      │  compose        │
-   you ────────────▶│  coach.py        │──┘      │  ↓              │
-                    └──────────────────┘         │  validate ◀─────┼── HARD
-                              │                  └─────────────────┘   guardrail
+                    │  jobs/nightly.py │   sync + reconcile + cleanup only
+                    └──────────────────┘   (writes history tables, no draft)
+                              │
+                              ▼ feeds
+                    ┌── the chat ──────┐        ┌──────────────┐
+   you ────────────▶│  coach.py        │───────▶│  validate ◀──┼── HARD
+                    └──────────────────┘        └──────────────┘   guardrail
+                              │
                               │ explicit push
                               ▼
                           Garmin ──▶ watch
 ```
 
-Everything expensive is deterministic Python. The LLM is generative at exactly
-**one** step — turning `{state + playbook + goals}` into a structured session —
-and conversational in the chat. It never decides whether something is safe.
+Everything expensive is deterministic Python. The LLM is generative when
+composing/editing a session in chat, turning `{state + playbook + goals}` into
+a structured session, and conversational otherwise. It never decides whether
+something is safe.
 
 (One narrow exception, on the push path: naming an exercise Garmin's word-matcher
 can't place. It's gated, batched, cached, and its answer is validated against
@@ -49,15 +53,18 @@ Garmin's real taxonomy — see `tools/exercise_match.py`.)
 | `tools/notion.py` | **Read-only.** Only the habits/knee log. Jim never writes to Notion. |
 | `tools/history.py` | Deterministic features (volume, muscle balance, days-since-legs, pain trend) and the readiness read (acute:chronic workload + recovery → push/steady/ease/rest). |
 | `tools/research.py` | Gated: curated corpus (pgvector) + Tavily. Only reachable when the off-heuristic fires. |
-| `agent/heuristics.py` | Cheap code that decides *whether to research* and *which model tier* — before any tokens are spent. |
-| `agent/compose.py` | The one generative step. |
-| `agent/validate.py` | The guardrail. Read the module docstring; the reasoning matters. |
-| `agent/loop.py` | `run_agent(user_id, today)`: bounded, single-shot, injectable toolbox. |
+| `agent/validate.py` | The guardrail. Read the module docstring; the reasoning matters. Shared by chat's draft merge. |
 | `playbook.py` | `load_playbook(user_id)`/`save_playbook` — the JSONB `playbooks` row per account; disk YAML is only the seed source now. |
 | `auth.py` | Email + password signup/login, signed session cookies (`itsdangerous`), `_require_user`. |
 | `crypto.py` | AES-GCM encrypt/decrypt for Garmin/Notion credentials at rest (`CREDENTIAL_ENCRYPTION_KEY`). |
 | `coach.py` | The chat: conversation, lookups, draft merging, goals memory, pushing — all `user_id`-scoped. |
-| `app.py` | FastAPI: `/health`, `/run`, `/api/cron/nightly`, `/auth/*`, `/settings/garmin/*`, `/api/playbook`, the `/chat` API — and the entire chat UI as one inline HTML string. |
+| `app.py` | FastAPI app + `/health`, `/api/cron/nightly`, static/manifest, `/login` — wires in the `web/` routers below. |
+| `web/deps.py` | `_ready`/`_current_user`/`_require_user` — cross-cutting request helpers every route group imports the *module*, not the names, from (so tests have one patch point). |
+| `web/auth_routes.py` | `/auth/signup`, `/auth/login`, `/auth/logout`. |
+| `web/chat_routes.py` | The chat API + the `/chat` page. |
+| `web/playbook_routes.py` | `/api/playbook`, `/api/garmin/workouts*` — the playbook editor and Garmin-workout import. |
+| `web/garmin_routes.py` | `/settings/garmin*`, `/api/garmin/status` — Garmin account connect + MFA. |
+| `web/templates.py` | The three inline HTML/CSS/JS page strings: `CHAT_PAGE`, `LOGIN_PAGE`, `GARMIN_PAGE`. No build step (see "Working here"). |
 
 ## Load-bearing decisions
 
@@ -71,22 +78,27 @@ volume cap** — a weekly budget checked per-day rejected any normal session and
 made a full week impossible to build. An unbalanced week is suboptimal; a
 silently dropped day is worse.
 
-**Propose-only.** `AUTO_PUSH = False`. The nightly run writes a *draft*, never
-the watch. Workouts are scheduled only by `coach.approve()` / `coach.push_day()`
-— i.e. a button. Flipping `AUTO_PUSH` is gated on the M5 eval suite
-(`evals/run_evals.py`, still a scaffold).
+**Propose-only.** `AUTO_PUSH = False`. Chat writes a *draft*, never the watch.
+Workouts are scheduled only by `coach.approve()` / `coach.push_day()` — i.e. a
+button. There's no eval suite gating a flip to auto-push yet (the old M5
+scaffold, `evals/run_evals.py`, tested the now-removed nightly auto-compose
+path; a chat-turn eval would need a different shape, one scenario per
+conversation, not per cron run).
 
-**The athlete's plan wins.** A day planned in chat is recorded `source='chat'`,
-and the nightly run steps aside for it rather than overwriting.
+**Nightly is housekeeping, not planning.** `jobs/nightly.py` syncs Garmin/Notion
+into history tables, reconciles today's adherence, and sweeps stale one-off
+Garmin adaptations — it never writes to the `draft` kv. The athlete gets a plan
+only by asking the coach for one; there's no unsolicited overnight proposal to
+step aside for.
 
 **Drafts merge, they don't replace.** The model returns only the days it
 changed; they're merged onto the plan by `for_date`. Then the *merged* plan is
 validated as a whole — leg spacing only means anything when the days are seen
 together. Fail once → revise → still failing → drop the day with a note.
 
-**Every side effect is injected.** `Toolbox` (loop) and `CoachDeps` (coach)
-exist so the tests never touch Postgres, Garmin, Notion, or an LLM. Keep it that
-way: if you add a dependency, add it to the dataclass.
+**Every side effect is injected.** `CoachDeps` (coach) exists so the tests
+never touch Postgres, Garmin, Notion, or an LLM. Keep it that way: if you add a
+dependency, add it to the dataclass.
 
 **A day is either a template pick or an adaptation — never both.** A base workout
 already exists on Garmin with real loaded weights, so scheduling it by
@@ -138,18 +150,19 @@ per account by the composite primary key, not by a string-prefix convention:
 | `exercise_map` | Movement name → the Garmin exercise it resolved to (nulls cached too, so a name costs one LLM call ever) |
 
 Memory hierarchy, from most to least durable: `playbook/directives.md` (git,
-you edit it) → `goals` (chat) → `draft` (chat + nightly) → history tables. The
-guardrail sits above all of it and nothing can override it. See `docs/memory.md`.
+you edit it) → `goals` (chat) → `draft` (chat-only) → history tables (kept
+fresh by nightly housekeeping). The guardrail sits above all of it and nothing
+can override it. See `docs/memory.md`.
 
 ## Working here
 
 ```bash
 ruff check . && pytest          # 224 tests, all offline — no live APIs in CI
 uvicorn jim.app:app --reload    # sign in/up at /login, chat at /chat
-python -m jim.jobs.nightly      # the nightly run, by hand — fans out over every
-                                 # nightly_enabled user; python scripts/backfill_users.py
-                                 # seeds the original athlete's account first
-python evals/run_evals.py
+python -m jim.jobs.nightly      # nightly housekeeping (sync/reconcile/cleanup),
+                                 # by hand — fans out over every nightly_enabled
+                                 # user; python scripts/backfill_users.py seeds
+                                 # the original athlete's account first
 ```
 
 - **Tests are offline, always.** Recorded fixtures, injected fakes. A test that
@@ -157,12 +170,12 @@ python evals/run_evals.py
 - **Migrations are additive and idempotent** (`src/jim/migrations/`). They ship
   inside the package and run on the request path — serverless has no reliable
   startup hook. Never edit a migration that's been applied; add `00N_*.sql`.
-- **Cost discipline is a feature.** Nightly: ≤2 LLM calls, research gated, hard
-  tool-call cap. Chat: 1 call/turn + ≤4 lookup rounds, state cached, history
-  truncated. Before you hand the model a job, ask whether Python could do it.
+- **Cost discipline is a feature.** Nightly housekeeping makes zero LLM calls.
+  Chat: 1 call/turn + ≤4 lookup rounds, state cached, history truncated, research
+  gated. Before you hand the model a job, ask whether Python could do it.
 - **The chat UI has no build step** — it's one inline HTML/CSS/JS string in
-  `app.py` (hence its `E501` exemption in `pyproject.toml`). After changing it,
-  the `responsive-check` agent verifies it across widths.
+  `web/templates.py` (hence its `E501` exemption in `pyproject.toml`). After
+  changing it, the `responsive-check` agent verifies it across widths.
 - **Secrets never land in git.** `.env` locally; Vercel env vars in prod.
 
 ## Where to read next

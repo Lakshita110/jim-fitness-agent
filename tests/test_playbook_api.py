@@ -10,8 +10,11 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import jim.app as app_mod
+import jim.web.playbook_routes as playbook_routes
+from jim import auth
 from jim.auth import User
 from jim.playbook import Playbook, WorkoutTemplate
+from jim.web import deps
 
 client = TestClient(app_mod.app)
 TEST_USER = User(id=3, email="athlete@example.com")
@@ -19,7 +22,7 @@ TEST_USER = User(id=3, email="athlete@example.com")
 
 @pytest.fixture(autouse=True)
 def _fresh_session(monkeypatch):
-    monkeypatch.setattr(app_mod, "_ready", lambda: None)
+    monkeypatch.setattr(deps, "_ready", lambda: None)
     client.cookies.clear()
     yield
     client.cookies.clear()
@@ -30,9 +33,9 @@ def fake_settings():
 
 
 def _sign_in(monkeypatch, user=TEST_USER):
-    monkeypatch.setattr(app_mod.auth, "authenticate", lambda email, password: user)
+    monkeypatch.setattr(auth, "authenticate", lambda email, password: user)
     monkeypatch.setattr(
-        app_mod.auth, "get_user_by_id", lambda uid: user if uid == user.id else None
+        auth, "get_user_by_id", lambda uid: user if uid == user.id else None
     )
     r = client.post("/auth/login", json={"email": user.email, "password": "irrelevant"})
     assert r.status_code == 200, r.text
@@ -53,8 +56,8 @@ class FakeStore:
 
 
 def _wire_store(monkeypatch, store: FakeStore):
-    monkeypatch.setattr(app_mod, "load_playbook", store.load)
-    monkeypatch.setattr(app_mod, "save_playbook", store.save)
+    monkeypatch.setattr(playbook_routes, "load_playbook", store.load)
+    monkeypatch.setattr(playbook_routes, "save_playbook", store.save)
 
 
 def test_get_playbook_requires_auth(monkeypatch):

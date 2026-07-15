@@ -2,8 +2,8 @@
 iterate every nightly_enabled user, isolate one user's failure from the rest,
 and skip users with nightly_enabled=false. Offline: connect()/ensure_migrated()
 are monkeypatched, and _run_nightly_for_user is stubbed per-test so these tests
-exercise the fan-out logic itself, not the full sync/reconcile/compose pipeline
-(that's covered by test_reconcile.py, test_loop.py, etc)."""
+exercise the fan-out logic itself, not the full sync/reconcile/cleanup pipeline
+(that's covered by test_reconcile.py, test_workout_cleanup.py, etc)."""
 
 import jim.jobs.nightly as nightly_mod
 
