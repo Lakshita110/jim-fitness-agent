@@ -41,7 +41,6 @@ one Postgres, one operator.
 | `scripts/m1_roundtrip.py` | Standalone dev CLI, named for an early single-user milestone; referenced only in `README.md` and a comment in `auth.py`, never imported | stale — likely safe to remove, confirm before deleting |
 | `tests/*` | Offline, fixture/fake-driven, one file per module + `test_multi_user_isolation.py` (load-bearing) | active |
 | `docs/*.md`, `README.md`, `HANDOFF.md` | Architecture/chat/memory/deploy docs | needs-review — not re-verified against current code this session |
-| `PLAN.md` | Original design record | stale — already flagged in-repo as superseded in places |
 
 ## Architecture rules (from the code, not assumed)
 

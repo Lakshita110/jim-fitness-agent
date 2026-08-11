@@ -4,7 +4,7 @@ How to bring Jim up on a fresh machine so the app runs against live
 Garmin/OpenRouter in a real browser, plus the things that bit us on the way.
 
 For the design, read `CLAUDE.md` (architecture) and `docs/` (chat, memory,
-garmin_strength, notion_schema). `PLAN.md` is the original design record.
+garmin_strength).
 
 ## What Jim is
 

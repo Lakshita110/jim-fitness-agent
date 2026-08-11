@@ -11,9 +11,7 @@ sync, adherence reconcile, stale-workout cleanup) but never writes a plan
 itself.
 
 Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
-[docs/architecture.md](docs/architecture.md). [PLAN.md](PLAN.md) is the original
-design record — kept for the reasoning, superseded in places (agent was
-originally code-named Vesper). Milestone status:
+[docs/architecture.md](docs/architecture.md). Milestone status:
 
 - [x] **M1** — Garmin write round-trip: verified server-side + on-watch
       (docs/garmin_strength.md, exercise taxonomy verified against Garmin's own)
@@ -51,7 +49,7 @@ src/jim/
 api/index.py         # Vercel entrypoint — re-exports app.app as the ASGI handler
 playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
 data/corpus/         # curated research corpus (seeded by scripts/seed_corpus.py)
-docs/                # architecture, chat, memory, garmin_strength, notion_schema
+docs/                # architecture, chat, memory, garmin_strength
 scripts/             # m1_roundtrip.py, backfill.py, backfill_users.py, garmin_login.py, seed_corpus.py
 tests/               # offline only — recorded fixtures, no live APIs
 ```
