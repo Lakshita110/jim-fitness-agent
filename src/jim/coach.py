@@ -263,6 +263,12 @@ hard rules — a rest day is often rest for a reason, so say so if it's unwise).
 Return "draft": [] only to wipe the entire plan. Nothing touches the athlete's
 watch until they explicitly approve.
 
+If your reply describes a specific session for a specific date — exercises,
+sets/reps, duration — that day MUST also appear in "draft", even for a plain
+question like "what should I train tomorrow?". The reply is not a substitute
+for the draft: the athlete only sees it on their plan, and can only push it,
+if it's there.
+
 TOOLS: look things up instead of guessing. Call exercise_history BEFORE setting
 any weight or rep target and progress conservatively from what was actually done
 (+2.5-5% load or +1-2 reps after a solid session; hold or reduce after a rough
