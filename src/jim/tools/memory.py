@@ -31,20 +31,6 @@ def record_suggestion(
     return int(row["id"])
 
 
-def chat_planned(user_id: int, for_date: date) -> bool:
-    """True when the athlete already iterated + approved a plan for `for_date`
-    in chat — the nightly run must not overwrite it."""
-    from jim.db import connect
-
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM suggestions WHERE user_id = %s AND for_date = %s"
-            " AND source = 'chat' LIMIT 1",
-            (user_id, for_date),
-        ).fetchone()
-    return row is not None
-
-
 def record_outcome(
     user_id: int,
     suggestion_id: int,

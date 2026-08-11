@@ -22,7 +22,7 @@ from jim.db import kv_get, kv_set
 from jim.playbook import Playbook, WorkoutTemplate, load_playbook, save_playbook
 from jim.schemas import ExerciseStep, StructuredSession
 from jim.tools.history import exercise_history, query_history, workout_history
-from jim.tools.memory import chat_planned, record_outcome, record_suggestion
+from jim.tools.memory import record_outcome, record_suggestion
 
 # --- a generic, literal fake Postgres ---------------------------------------
 # Every user-scoped SELECT this system issues puts `user_id = %s` (or an
@@ -341,15 +341,6 @@ def test_playbook_round_trips_a_workout_template(fake_db):
 # --- suggestions / outcomes ---------------------------------------------------
 
 
-def test_chat_planned_isolated_across_users(fake_db):
-    target = date(2026, 7, 11)
-    record_suggestion(
-        1, target, _session(target, "A's plan"), "rationale", False, "fast", source="chat",
-    )
-    assert chat_planned(2, target) is False
-    assert chat_planned(1, target) is True  # sanity
-
-
 def test_workout_history_does_not_leak_another_users_adherence(fake_db):
     target = date(2026, 7, 11)
     sid = record_suggestion(
@@ -373,8 +364,6 @@ def test_suggestions_and_outcomes_isolated_via_two_real_users(fake_db):
         user_a.id, target, _session(target, "A's real plan"), "r", False, "fast",
         source="chat",
     )
-    assert chat_planned(user_b.id, target) is False
-    assert chat_planned(user_a.id, target) is True
 
     save_playbook(user_a.id, Playbook(directives="A's knee-specific notes"))
     # B's playbook is untouched by A's save — still whatever B was seeded with

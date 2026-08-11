@@ -27,7 +27,7 @@ one Postgres, one operator.
 | `src/jim/tools/notion.py` | Read-only Notion habit/knee log | active |
 | `src/jim/tools/history.py` | Deterministic features + readiness read | active |
 | `src/jim/tools/research.py` | Gated corpus/Tavily research | active |
-| `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `chat_planned`, `record_outcome`); used by `jobs/reconcile.py` | active |
+| `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | active |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | active |
 | `src/jim/migrations/001–008_*.sql` | Additive, idempotent, never edited after applied | active |
