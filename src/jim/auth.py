@@ -56,15 +56,12 @@ def create_user(email: str, password: str) -> User:
                 "INSERT INTO user_credentials (user_id) VALUES (%s)", (row["id"],)
             )
             conn.execute(
-                "INSERT INTO playbooks (user_id, rotation, workouts, pt_routines, directives)"
-                " VALUES (%s, %s, %s, %s, %s)",
+                "INSERT INTO playbooks (user_id, rotation, workouts, directives)"
+                " VALUES (%s, %s, %s, %s)",
                 (
                     row["id"],
                     json.dumps(seed.rotation),
                     json.dumps({k: v.model_dump(mode="json") for k, v in seed.workouts.items()}),
-                    json.dumps(
-                        {k: v.model_dump(mode="json") for k, v in seed.pt_routines.items()}
-                    ),
                     seed.directives,
                 ),
             )

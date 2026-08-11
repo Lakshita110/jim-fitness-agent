@@ -127,7 +127,7 @@ def test_every_playbook_exercise_reaches_a_garmin_exercise():
     from jim.playbook import _load_playbook_from_disk
 
     playbook = _load_playbook_from_disk()
-    templates = list(playbook.workouts.values()) + list(playbook.pt_routines.values())
+    templates = list(playbook.workouts.values())
     names = {
         exercise.name
         for template in templates
@@ -158,7 +158,7 @@ def test_build_template_payload_from_playbook_home_pt():
     from jim.playbook import _load_playbook_from_disk
     from jim.tools.garmin import build_template_payload
 
-    home = _load_playbook_from_disk().pt_routines["pt_home"]
+    home = _load_playbook_from_disk().workouts["pt_home"]
     payload = build_template_payload(home)
     assert payload["sportType"]["sportTypeKey"] == "mobility"
     steps = payload["workoutSegments"][0]["workoutSteps"]

@@ -49,7 +49,6 @@ class GarminWorkoutImportBody(BaseModel):
     workout_id: str
     key: str
     label: str | None = None
-    target: str = "workouts"  # "workouts" (base rotation) or "pt_routines"
     add_to_rotation: bool = False
 
 
@@ -96,7 +95,7 @@ def import_garmin_workout(body: GarminWorkoutImportBody, request: Request) -> di
 
     try:
         promote_garmin_workout(
-            user.id, body.workout_id, body.key, body.target,
+            user.id, body.workout_id, body.key,
             label=body.label, add_to_rotation=body.add_to_rotation,
         )
     except RuntimeError as e:

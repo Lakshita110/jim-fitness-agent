@@ -34,7 +34,7 @@ _COND_RE = re.compile(r"(\w+(?:\.\w+)?)\s=\s%s")
 _INSERT_RE = re.compile(r"INSERT INTO (\w+) \(([^)]+)\)\s+VALUES\s+\(([^)]+)\)(.*)")
 _JSON_COLUMNS = {
     "kv": {"value"},
-    "playbooks": {"rotation", "workouts", "pt_routines"},
+    "playbooks": {"rotation", "workouts"},
     "suggestions": {"plan"},
     "garmin_daily": {"raw"},
     "garmin_activities": {"summary"},

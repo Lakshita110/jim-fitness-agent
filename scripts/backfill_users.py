@@ -66,12 +66,11 @@ def main() -> None:
 
         pb = _load_playbook_from_disk()
         conn.execute(
-            "UPDATE playbooks SET rotation = %s, workouts = %s, pt_routines = %s,"
+            "UPDATE playbooks SET rotation = %s, workouts = %s,"
             " directives = %s, updated_ts = now() WHERE user_id = %s",
             (
                 json.dumps(pb.rotation),
                 json.dumps({k: v.model_dump(mode="json") for k, v in pb.workouts.items()}),
-                json.dumps({k: v.model_dump(mode="json") for k, v in pb.pt_routines.items()}),
                 pb.directives,
                 user.id,
             ),
@@ -106,8 +105,7 @@ def main() -> None:
         )
         or "  credentials: none found in env"
     )
-    print(f"  playbook: {len(pb.rotation)} rotation slots, {len(pb.workouts)} workouts,"
-          f" {len(pb.pt_routines)} PT routines, "
+    print(f"  playbook: {len(pb.rotation)} rotation slots, {len(pb.workouts)} workouts, "
           f"{'directives set' if pb.directives else 'no directives'}")
     print("Sign in at /login with the email/password you just entered.")
 

@@ -1,8 +1,8 @@
 """Playbook — the durable, human-editable memory layer (see playbook/).
 
-Three files, loaded into the agent's context every night:
-- base_workouts.yaml : the A/B/C strength rotation (references Garmin IDs)
-- pt_routines.yaml   : home + gym PT for non-lifting days
+Two files, loaded into the agent's context every night:
+- base_workouts.yaml : one flat workout library (strength + PT), plus the
+                        `rotation` order drawn from it (references Garmin IDs)
 - directives.md      : standing instructions the user edits in plain English
 
 This is the "give instructions to the agent" surface. Editing a file changes
@@ -53,41 +53,47 @@ class WorkoutTemplate(BaseModel):
 class Playbook(BaseModel):
     rotation: list[str] = []
     workouts: dict[str, WorkoutTemplate] = {}
-    pt_routines: dict[str, WorkoutTemplate] = {}
     directives: str = ""
 
     def template(self, key: str) -> WorkoutTemplate | None:
-        return self.workouts.get(key) or self.pt_routines.get(key)
+        return self.workouts.get(key)
 
     def by_workout_id(self, workout_id: str) -> WorkoutTemplate | None:
         """Reverse lookup — the model reliably echoes the Garmin ID even when it
         forgets (or invents) the template_key."""
-        for wt in (*self.workouts.values(), *self.pt_routines.values()):
+        for wt in self.workouts.values():
             if wt.garmin_workout_id == workout_id:
                 return wt
         return None
 
-    def next_in_rotation(self, last_key: str | None) -> str | None:
-        """The letter after `last_key` in the A/B/C cycle (wraps)."""
+    def rotation_from(self, last_key: str | None) -> list[str]:
+        """The rotation re-ordered to start at whatever follows `last_key`.
+
+        Multi-day planning needs the whole continuing order, not just the next
+        key — the coach lays out a week in one turn, so it has to know that
+        after B comes C then A then B again. An unknown or missing `last_key`
+        starts at the top."""
         if not self.rotation:
-            return None
+            return []
         if last_key not in self.rotation:
-            return self.rotation[0]
-        i = self.rotation.index(last_key)
-        return self.rotation[(i + 1) % len(self.rotation)]
+            return list(self.rotation)
+        i = self.rotation.index(last_key) + 1
+        return self.rotation[i:] + self.rotation[:i]
 
     def to_prompt(self) -> str:
         """Compact rendering for the compose prompt — the model sees names,
         doses, and tags, not raw YAML."""
-        lines = ["## Base strength rotation (schedule the Garmin ID as-is on lifting days)"]
+        lines = ["## Rotation (schedule the Garmin ID as-is on lifting days)"]
         lines.append(f"Rotation order: {' → '.join(self.rotation)}")
         for key in self.rotation:
             wt = self.workouts.get(key)
             if wt:
                 lines.append(_render_template(wt))
-        lines.append("\n## PT routines (non-lifting days)")
-        for wt in self.pt_routines.values():
-            lines.append(_render_template(wt))
+        other = [wt for key, wt in self.workouts.items() if key not in self.rotation]
+        if other:
+            lines.append("\n## Other workouts (not in rotation — non-lifting days, PT, etc.)")
+            for wt in other:
+                lines.append(_render_template(wt))
         if self.directives:
             lines.append("\n## Standing directives (obey these)\n" + self.directives)
         return "\n".join(lines)
@@ -125,17 +131,25 @@ def use_existing_workout(session: StructuredSession, playbook: "Playbook") -> bo
     This is enforced here rather than trusted to the prompt because the model
     routinely echoes a template's garmin_workout_id alongside its edits. Reading
     the ID first meant those edits were silently discarded and stock Full Body A
-    landed on the watch instead."""
+    landed on the watch instead.
+
+    The ID must resolve against THIS playbook even when steps is empty — caught
+    live testing against a real account, where a model invented a whole template
+    ("PT Day · Gym", a plausible-looking 10-digit ID) that wasn't in the
+    athlete's playbook at all. With no resolution check here, that would have
+    scheduled an unverified ID straight onto the watch: either a loud Garmin
+    error, or — worse — a real but unrelated workout that happened to share
+    that ID, scheduled with no record of why."""
     if not session.garmin_workout_id:
         return False
-    if not session.steps:
-        return True
 
     wt = playbook.template(session.template_key or "") or playbook.by_workout_id(
         session.garmin_workout_id
     )
     if wt is None:
-        return False  # unknown template but explicit steps — trust the steps
+        return False  # unresolvable ID — never trust it, empty steps or not
+    if not session.steps:
+        return True
     if any(step.weight_kg is not None for step in session.steps):
         return False  # templates carry no loads, so a prescribed weight is an edit
     prescribed = [
@@ -158,9 +172,13 @@ def _dose(ex: Exercise) -> str:
 
 
 def _render_template(wt: WorkoutTemplate) -> str:
-    head = f"\n### {wt.label}"
+    # The key is shown because it's the handle the playbook-writing tools take
+    # (save_playbook_workout / set_playbook_rotation) — without it the model can
+    # only name templates it can't actually address.
+    head = f"\n### {wt.label} (key={wt.key}"
     if wt.garmin_workout_id:
-        head += f" (garmin_workout_id={wt.garmin_workout_id})"
+        head += f", garmin_workout_id={wt.garmin_workout_id}"
+    head += ")"
     lines = [head]
     for block in wt.blocks:
         prefix = f"- {block.group}: " if block.group else "- "
@@ -178,7 +196,6 @@ def _load_playbook_from_disk(directory: Path = PLAYBOOK_DIR) -> Playbook:
     # read_text() defaults to the locale encoding (cp1252 on Windows), which
     # mangles them into the prompt, the exercise match, and the watch.
     base = yaml.safe_load((directory / "base_workouts.yaml").read_text("utf-8")) or {}
-    pt = yaml.safe_load((directory / "pt_routines.yaml").read_text("utf-8")) or {}
     directives_path = directory / "directives.md"
     directives = directives_path.read_text("utf-8") if directives_path.exists() else ""
 
@@ -186,14 +203,9 @@ def _load_playbook_from_disk(directory: Path = PLAYBOOK_DIR) -> Playbook:
         key: WorkoutTemplate(key=key, **spec)
         for key, spec in (base.get("workouts") or {}).items()
     }
-    pt_routines = {
-        key: WorkoutTemplate(key=key, **spec)
-        for key, spec in (pt.get("routines") or {}).items()
-    }
     return Playbook(
         rotation=base.get("rotation", []),
         workouts=workouts,
-        pt_routines=pt_routines,
         directives=_strip_html_comments(directives),
     )
 
@@ -212,7 +224,7 @@ def load_playbook(user_id: int) -> Playbook:
 
     with connect() as conn:
         row = conn.execute(
-            "SELECT rotation, workouts, pt_routines, directives FROM playbooks"
+            "SELECT rotation, workouts, directives FROM playbooks"
             " WHERE user_id = %s",
             (user_id,),
         ).fetchone()
@@ -222,9 +234,8 @@ def load_playbook(user_id: int) -> Playbook:
     # every field) — override rather than pass both, or WorkoutTemplate(key=k, **v)
     # raises "multiple values for keyword argument 'key'".
     workouts = {k: WorkoutTemplate(**{**v, "key": k}) for k, v in row["workouts"].items()}
-    pt_routines = {k: WorkoutTemplate(**{**v, "key": k}) for k, v in row["pt_routines"].items()}
     return Playbook(
-        rotation=row["rotation"], workouts=workouts, pt_routines=pt_routines,
+        rotation=row["rotation"], workouts=workouts,
         directives=row["directives"],
     )
 
@@ -235,16 +246,15 @@ def save_playbook(user_id: int, pb: Playbook) -> None:
 
     with connect() as conn:
         conn.execute(
-            "INSERT INTO playbooks (user_id, rotation, workouts, pt_routines, directives,"
-            " updated_ts) VALUES (%s, %s, %s, %s, %s, now())"
+            "INSERT INTO playbooks (user_id, rotation, workouts, directives,"
+            " updated_ts) VALUES (%s, %s, %s, %s, now())"
             " ON CONFLICT (user_id) DO UPDATE SET rotation = EXCLUDED.rotation,"
-            " workouts = EXCLUDED.workouts, pt_routines = EXCLUDED.pt_routines,"
+            " workouts = EXCLUDED.workouts,"
             " directives = EXCLUDED.directives, updated_ts = now()",
             (
                 user_id,
                 json.dumps(pb.rotation),
                 json.dumps({k: v.model_dump(mode="json") for k, v in pb.workouts.items()}),
-                json.dumps({k: v.model_dump(mode="json") for k, v in pb.pt_routines.items()}),
                 pb.directives,
             ),
         )
@@ -252,7 +262,7 @@ def save_playbook(user_id: int, pb: Playbook) -> None:
 
 
 def promote_garmin_workout(
-    user_id: int, workout_id: str, key: str, target: str = "workouts",
+    user_id: int, workout_id: str, key: str,
     label: str | None = None, add_to_rotation: bool = False,
 ) -> WorkoutTemplate:
     """Pull a real Garmin workout in by id and save it into the playbook under
@@ -274,12 +284,9 @@ def promote_garmin_workout(
         template.label = label
 
     pb = load_playbook(user_id)
-    if target == "pt_routines":
-        pb.pt_routines[key] = template
-    else:
-        pb.workouts[key] = template
-        if add_to_rotation and key not in pb.rotation:
-            pb.rotation.append(key)
+    pb.workouts[key] = template
+    if add_to_rotation and key not in pb.rotation:
+        pb.rotation.append(key)
     save_playbook(user_id, pb)
 
     created = kv_get(user_id, "jim_created_workouts") or {}
@@ -290,6 +297,76 @@ def promote_garmin_workout(
         kv_set(user_id, "jim_created_workouts", created)
 
     return template
+
+
+def save_workout_template(
+    user_id: int, key: str, *,
+    label: str | None = None,
+    sport: str | None = None,
+    warmup: list[Exercise] | None = None,
+    blocks: list[Block] | None = None,
+    equipment: list[str] | None = None,
+) -> WorkoutTemplate:
+    """Upsert a playbook template — the chat-side counterpart to
+    promote_garmin_workout, which can only pull in a workout that already
+    exists on Garmin. This one both creates templates from scratch and edits
+    existing ones, so a whole new rotation can be authored in conversation.
+
+    Creating requires `label` and `sport`; editing applies only the fields
+    supplied and leaves the rest alone."""
+    pb = load_playbook(user_id)
+    wt = pb.workouts.get(key)
+
+    if wt is None:
+        missing = [n for n, v in (("label", label), ("sport", sport)) if not v]
+        if missing:
+            raise RuntimeError(
+                f"creating workout {key!r} needs {' and '.join(missing)}"
+            )
+        wt = WorkoutTemplate(key=key, label=label or "", sport=sport or "")
+        pb.workouts[key] = wt
+    else:
+        if label is not None:
+            wt.label = label
+        if sport is not None:
+            wt.sport = sport
+
+    if equipment is not None:
+        wt.equipment = equipment
+    if warmup is not None:
+        wt.warmup = warmup
+    if blocks is not None:
+        wt.blocks = blocks
+
+    # Only a content change invalidates the Garmin link. There's no Garmin
+    # "update workout" API (tools/garmin.py has create/delete/schedule only),
+    # so a template whose steps changed must be rebuilt fresh next time it's
+    # scheduled rather than reusing the old object with stale steps. A
+    # rename, though, must NOT throw away the workout — and with it the
+    # weights the athlete has loaded onto it.
+    if warmup is not None or blocks is not None:
+        wt.garmin_workout_id = None
+
+    save_playbook(user_id, pb)
+    return wt
+
+
+def set_rotation(user_id: int, keys: list[str]) -> list[str]:
+    """Replace the rotation order outright, so the coach can restructure a
+    program (not just append to it, which is all promote_garmin_workout can do).
+
+    Every key must already exist in `workouts` — a rotation pointing at a
+    template that isn't there would schedule nothing. Repeats are allowed: a
+    rotation is an order, not a set, so [a, b, a, c] is legitimate."""
+    pb = load_playbook(user_id)
+    unknown = [k for k in keys if k not in pb.workouts]
+    if unknown:
+        raise RuntimeError(
+            "no playbook workout with key " + ", ".join(repr(k) for k in unknown)
+        )
+    pb.rotation = list(keys)
+    save_playbook(user_id, pb)
+    return pb.rotation
 
 
 def _strip_html_comments(text: str) -> str:

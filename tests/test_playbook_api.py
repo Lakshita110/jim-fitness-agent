@@ -94,7 +94,6 @@ def test_round_trips_a_valid_edit(monkeypatch):
         "workouts": {
             "a": {"key": "a", "label": "Day A", "sport": "strength_training", "blocks": []}
         },
-        "pt_routines": {},
         "directives": "edited directives",
     }
     import json
@@ -145,7 +144,7 @@ def test_workout_template_missing_required_field_returns_400_not_500(monkeypatch
     # WorkoutTemplate requires `sport`; omit it.
     bad = json.dumps(
         {"rotation": [], "workouts": {"a": {"key": "a", "label": "Day A"}},
-         "pt_routines": {}, "directives": ""}
+         "directives": ""}
     )
     r = client.post("/api/playbook", json={"raw": bad})
     assert r.status_code == 400

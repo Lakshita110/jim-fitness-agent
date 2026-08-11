@@ -12,8 +12,8 @@ through the chat instead (docs/chat.md).
 
 - Three lifting days a week, rotating **Full Body A → B → C** (see
   `base_workouts.yaml`). Never two lifting days back-to-back.
-- On non-lifting days, do a **PT routine** (see `pt_routines.yaml`) unless the
-  day is a planned rest.
+- On non-lifting days, do a **PT routine** (`pt_home`/`pt_gym` in
+  `base_workouts.yaml`) unless the day is a planned rest.
 - At least one full rest day a week; add rest when recovery is poor.
 
 ## Lifting days

@@ -114,7 +114,7 @@ def test_create_user_seeds_the_generic_default_playbook_not_bare_empty(fake_db):
     from jim.playbook import _load_default_playbook
 
     user = auth_mod.create_user("mom@example.com", "pw")
-    _, rotation_json, workouts_json, pt_json, directives = fake_db.playbooks[user.id]["raw"]
+    _, rotation_json, workouts_json, directives = fake_db.playbooks[user.id]["raw"]
 
     default = _load_default_playbook()
     assert directives == default.directives
