@@ -66,7 +66,7 @@ Verify, then run:
 
 ```bash
 ruff check .
-pytest                            # 224 tests, all offline
+pytest                            # 215 tests, all offline
 python scripts/backfill.py 120    # first run: pull ~120d of Garmin history
 uvicorn jim.app:app --reload
 ```

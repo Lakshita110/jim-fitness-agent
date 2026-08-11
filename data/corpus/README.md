@@ -1,4 +1,4 @@
-# Research corpus sources (PLAN.md §12 Q4)
+# Research corpus sources
 
 Drop curated markdown files here and run `python scripts/seed_corpus.py`.
 This corpus is the ONLY thing `research_training` searches besides Tavily —

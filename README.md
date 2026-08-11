@@ -28,8 +28,8 @@ workload ratio + recovery → push/steady/ease/rest, `tools/history.py`).
 
 ```
 src/jim/
-  config.py          # PLAN §8 constants + guardrail bounds + env-backed secrets
-  schemas.py         # typed tool contracts (PLAN §7)
+  config.py          # constants + guardrail bounds + env-backed secrets
+  schemas.py         # typed tool contracts, incl. StructuredSession
   db.py              # Postgres + idempotent migrations + kv store (composite user_id, key)
   migrations/        # additive, idempotent SQL (001-009); ships inside the package
   auth.py            # email+password signup/login, session cookies, _require_user
