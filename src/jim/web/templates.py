@@ -62,10 +62,6 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .pb-close { color: var(--muted); background: none; border: none; font-size: 20px; cursor: pointer;
             font-family: inherit; line-height: 1; }
 .pb-close:hover { color: var(--ink); }
-.pb-view-toggle { background: none; border: 1px solid var(--glass-line); border-radius: 999px;
-             color: var(--muted); font-family: inherit; font-size: 11.5px; padding: 4px 12px;
-             cursor: pointer; }
-.pb-view-toggle:hover { color: var(--ink); }
 #pbText { flex: 1; min-height: 320px; resize: vertical; background: rgba(255,255,255,.04);
           border: 1px solid var(--glass-line); border-radius: 12px; color: var(--ink);
           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
@@ -146,7 +142,6 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
 .gw-select-list.open { display: block; }
 .gw-select-opt { padding: 7px 10px; font-size: 12px; color: var(--ink); cursor: pointer; }
 .gw-select-opt:hover, .gw-select-opt.hl { background: rgba(255,255,255,.08); }
-.gw-select-tag { color: var(--muted); font-size: 11px; }
 
 .main { flex: 1; display: flex; min-height: 0; position: relative; }
 .chat-col { flex: 1 1 58%; min-width: 0; display: flex; flex-direction: column;
@@ -236,10 +231,18 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
 
 /* --- plan panel ------------------------------------------------------------ */
 .peek { display: none; }
-.plan-head { padding: 16px 20px 10px; flex-shrink: 0; position: relative; z-index: 1; }
-.plan-title { font-family: 'Fraunces', Georgia, serif; font-style: italic; font-weight: 500;
+.plan-head { padding: 16px 20px 10px; flex-shrink: 0; position: relative; z-index: 1;
+             display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; }
+.plan-title { flex: 1; font-family: 'Fraunces', Georgia, serif; font-style: italic; font-weight: 500;
               font-size: 19px; letter-spacing: -.01em; color: var(--ink); }
-.plan-status { font-size: 11px; letter-spacing: .02em; color: var(--muted); margin-top: 4px; }
+/* Ghost button: the primary action in this column is Push, in the footer. */
+.plan-week-btn { background: none; border: 1px solid var(--glass-line); border-radius: 999px;
+                 color: var(--muted); font-family: inherit; font-size: 11.5px; padding: 4px 12px;
+                 cursor: pointer; }
+.plan-week-btn:hover:not(:disabled) { color: var(--ink); border-color: rgba(180,206,158,.5); }
+.plan-week-btn:disabled { opacity: .5; cursor: default; }
+.plan-status { flex-basis: 100%; font-size: 11px; letter-spacing: .02em; color: var(--muted);
+               margin-top: 4px; }
 .plan-rows { flex: 1; overflow-y: auto; padding: 4px 12px; position: relative; z-index: 1; }
 .row-day { position: relative; padding: 13px 14px; min-height: 58px; border-radius: 14px;
            margin-bottom: 2px; }
@@ -300,6 +303,10 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
               border-radius: 999px; padding: 6px 8px 6px 13px; }
 .scope-pill button { border: none; background: transparent; color: var(--sage); font-size: 15px;
                      line-height: 1; cursor: pointer; padding: 0 2px; }
+/* Resting state: present so the mode is always legible, muted so the
+   restrictive day-scope still reads as the active one. */
+.scope-pill.week { color: var(--muted); background: transparent; border-color: var(--glass-line);
+                   padding: 6px 13px; }
 .plan-foot { padding: 14px 18px calc(16px + env(safe-area-inset-bottom));
              flex-shrink: 0; position: relative; z-index: 1; }
 #push { width: 100%; padding: 14px; background: transparent; border: 1.5px solid var(--sage);
@@ -343,7 +350,6 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
   <div class="pb-panel">
     <div class="pb-head">
       <div class="pb-title">Playbook</div>
-      <button type="button" class="pb-view-toggle" id="pbViewToggle">Edit as JSON</button>
       <button type="button" class="pb-close" id="pbClose" aria-label="Close">&times;</button>
     </div>
     <details class="pb-import-details">
@@ -355,14 +361,9 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
             <div class="gw-select-list" id="pbGarminSelectList"></div>
           </div>
           <input id="pbImportKey" type="text" placeholder="key (e.g. full_body_d)" />
-          <select id="pbImportTarget">
-            <option value="workouts">base rotation</option>
-            <option value="pt_routines">PT routine</option>
-          </select>
         </div>
         <div class="pb-import-row">
           <label class="pb-import-rot"><input id="pbAddToRotation" type="checkbox" /> add to rotation</label>
-          <label class="pb-import-rot"><input id="pbShowAdaptations" type="checkbox" /> show my one-off adaptations too</label>
           <button type="button" class="pb-import-btn" id="pbImportBtn">Import</button>
         </div>
       </div>
@@ -429,6 +430,7 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
     </div>
     <div class="plan-head">
       <div class="plan-title">Plan</div>
+      <button type="button" class="plan-week-btn" id="planWeek">Plan my week</button>
       <div class="plan-status" id="planStatus">Loading…</div>
     </div>
     <div class="plan-rows" id="planRows"></div>
@@ -445,6 +447,7 @@ const planCol = document.getElementById("planCol"), peek = document.getElementBy
 const peekText = document.getElementById("peekText");
 const planRows = document.getElementById("planRows"), planStatus = document.getElementById("planStatus");
 const pushBtn = document.getElementById("push");
+const planWeekBtn = document.getElementById("planWeek");
 const scopeBar = document.getElementById("scopeBar");
 const KIND = { strength:"STR", conditioning:"COND", mobility:"PT", rest:"REST" };
 const KIND_FULL = { strength:"Strength", conditioning:"Conditioning", mobility:"PT / mobility", rest:"Rest" };
@@ -660,7 +663,15 @@ function renderPlan(draft, opts) {
   pushBtn.disabled = !hasPlan;
   pushBtn.classList.remove("syncing");
   pushBtn.textContent = "Push to Garmin";
-  planStatus.textContent = hasPlan ? "Draft · not pushed yet" : "Nothing planned yet";
+  // Derived from what's actually on the watch — hardcoding "not pushed yet"
+  // used to stomp the synced message the moment anything re-rendered.
+  const real = (draft || []).filter(d => d.kind !== "rest");
+  const onWatch = real.filter(d => curPushStatus[d.for_date] === "pushed").length;
+  planStatus.textContent = !hasPlan ? "Nothing planned yet"
+    : !real.length ? "All rest this week"
+    : onWatch === real.length ? "On watch"
+    : onWatch ? `On watch · ${real.length - onWatch} still to push`
+    : "Draft · not pushed yet";
   renderCards(draft);
 
   if (opts.focus) focusPlan(focusRow || todayRow);
@@ -678,12 +689,20 @@ async function api(path, body) {
   if (!r.ok) throw new Error(data.detail || "error");
   return data;
 }
-/* --- edit scope (day vs. week) --- */
+/* --- edit scope (day vs. week) ---
+   Always visible, two states. Day scope is a hard restriction on the server
+   ("do not change any other day"), so hiding the bar when it was off left no
+   way to tell which mode you were in — and a multi-day request would come
+   back silently narrowed to one day. */
 function renderScopeBar() {
-  if (!scopeDate) { scopeBar.hidden = true; scopeBar.innerHTML = ""; t.placeholder = "Ask me anything…"; return; }
   scopeBar.hidden = false;
+  if (!scopeDate) {
+    scopeBar.innerHTML = `<span class="scope-pill week">Editing week</span>`;
+    t.placeholder = "Ask me anything…";
+    return;
+  }
   scopeBar.innerHTML = `<span class="scope-pill">Editing ${esc(fmtWhen(scopeDate))}` +
-    `<button type="button" id="scopeX" aria-label="Clear">✕</button></span>`;
+    `<button type="button" id="scopeX" aria-label="Back to the whole week">✕</button></span>`;
   document.getElementById("scopeX").onclick = clearScope;
   t.placeholder = "What should change on this day?";
 }
@@ -715,6 +734,7 @@ async function send(text) {
 }
 async function load() {
   rowSig.clear();
+  renderScopeBar();   // the bar is always on now, so it needs a first paint
   try {
     const r = await fetch("/chat/state");
     const s = await r.json();
@@ -744,6 +764,26 @@ pushBtn.addEventListener("click", async () => {
     add("bot", err.message);
     pushBtn.disabled = false; pushBtn.classList.remove("syncing"); pushBtn.textContent = "Push to Garmin";
   }
+});
+/* Plan my week — the canned instruction lives on the server (coach.plan_week),
+   which also guarantees days already on the watch survive. It echoes back the
+   prompt it used so the transcript reads like a normal turn. */
+planWeekBtn.addEventListener("click", async () => {
+  clearScope();               // a week plan is never day-scoped
+  removeHero();
+  // No typing bubble here: the prompt text only comes back with the response,
+  // and the user bubble has to precede the reply. "Planning…" on the button
+  // carries the wait instead.
+  planWeekBtn.disabled = true; planWeekBtn.textContent = "Planning…";
+  try {
+    const data = await api("/chat/plan-week", {});
+    if (data.prompt) add("me", data.prompt);
+    add("bot", data.reply);
+    if (data.today) serverToday = data.today;
+    if (data.push_status) curPushStatus = data.push_status;
+    if (data.draft !== null && data.draft !== undefined) renderPlan(data.draft, { focus: true });
+  } catch (err) { add("bot", err.message); }
+  finally { planWeekBtn.disabled = false; planWeekBtn.textContent = "Plan my week"; }
 });
 document.getElementById("clear").addEventListener("click", async (e) => {
   e.preventDefault();
@@ -778,13 +818,10 @@ async function openPlaybook() {
 }
 document.getElementById("playbookLink").addEventListener("click", (e) => { e.preventDefault(); openPlaybook(); });
 
-/* --- structured editor: one in-memory model (pbData), two views ---
+/* --- structured editor: one in-memory model (pbData) ---
    pbData is the source of truth. Structured edits mutate it and immediately
-   re-serialize into pbText, so the raw-JSON toggle always reflects the
-   latest state either view produced. */
+   re-serialize into the hidden pbText, which is what actually gets POSTed. */
 let pbData = null;
-const pbStructured = document.getElementById("pbStructured");
-const pbViewToggle = document.getElementById("pbViewToggle");
 const pbRotation = document.getElementById("pbRotation");
 const pbRotAddBtn = document.getElementById("pbRotAddBtn");
 const pbRotAddList = document.getElementById("pbRotAddList");
@@ -883,31 +920,12 @@ function showDirectivesTab(edit) {
 pbDirEditTab.addEventListener("click", () => showDirectivesTab(true));
 pbDirPreviewTab.addEventListener("click", () => showDirectivesTab(false));
 
-pbViewToggle.addEventListener("click", () => {
-  const showingRaw = !pbText.hidden;
-  if (showingRaw) {
-    try {
-      setPbData(JSON.parse(pbText.value));
-    } catch {
-      pbSetMsg("that's not valid JSON — fix it before switching views", "err");
-      return;
-    }
-    pbText.hidden = true; pbStructured.hidden = false;
-    pbViewToggle.textContent = "Edit as JSON";
-  } else {
-    syncPbText();
-    pbStructured.hidden = true; pbText.hidden = false;
-    pbViewToggle.textContent = "Structured";
-  }
-});
-
 /* --- import an existing Garmin workout into the playbook --- */
 const pbGarminSelectBtn = document.getElementById("pbGarminSelectBtn");
 const pbGarminSelectList = document.getElementById("pbGarminSelectList");
 const pbImportBtn = document.getElementById("pbImportBtn");
-const pbImportKey = document.getElementById("pbImportKey"), pbImportTarget = document.getElementById("pbImportTarget");
+const pbImportKey = document.getElementById("pbImportKey");
 const pbAddToRotation = document.getElementById("pbAddToRotation");
-const pbShowAdaptations = document.getElementById("pbShowAdaptations");
 let pbGarminWorkoutId = "";
 let pbAllWorkouts = [];
 function gwSetPlaceholder(text) {
@@ -916,17 +934,14 @@ function gwSetPlaceholder(text) {
 }
 function renderGarminOptions() {
   // Already-imported templates are never worth re-importing; one-off
-  // adaptations Jim built for a single day are hidden unless asked for,
-  // since they clutter the picker with dupes like "Full Body A (modified)".
-  const visible = pbAllWorkouts.filter(w =>
-    !w.already_in_playbook && (pbShowAdaptations.checked || !w.jim_created)
-  );
+  // adaptations Jim built for a single day are always hidden — they're
+  // disposable and swept up by the nightly cleanup, not worth importing.
+  const visible = pbAllWorkouts.filter(w => !w.already_in_playbook && !w.jim_created);
   if (!visible.length) { gwSetPlaceholder("No Garmin workouts found"); return; }
   gwSetPlaceholder("Select a Garmin workout…");
   pbGarminSelectList.innerHTML = visible.map(w => {
     const name = (w.name || "(untitled)").replace(/"/g, "&quot;");
-    const tag = w.jim_created ? ` <span class="gw-select-tag">adapted ${esc(w.for_date || "")}</span>` : "";
-    return `<div class="gw-select-opt" data-id="${w.workout_id}" data-name="${name}" data-template-key="${w.template_key || ""}">${esc(w.name || "(untitled)")}${tag}</div>`;
+    return `<div class="gw-select-opt" data-id="${w.workout_id}" data-name="${name}" data-template-key="${w.template_key || ""}">${esc(w.name || "(untitled)")}</div>`;
   }).join("");
 }
 async function loadGarminWorkouts() {
@@ -939,7 +954,6 @@ async function loadGarminWorkouts() {
     renderGarminOptions();
   } catch { gwSetPlaceholder("network error"); }
 }
-pbShowAdaptations.addEventListener("change", renderGarminOptions);
 pbGarminSelectBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   pbGarminSelectList.classList.toggle("open");
@@ -964,7 +978,7 @@ pbImportBtn.addEventListener("click", async () => {
   try {
     const r = await fetch("/api/garmin/workouts/import", { method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        workout_id, key, target: pbImportTarget.value, add_to_rotation: pbAddToRotation.checked,
+        workout_id, key, add_to_rotation: pbAddToRotation.checked,
       }) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { pbSetMsg(data.error || data.detail || "import failed", "err"); return; }
