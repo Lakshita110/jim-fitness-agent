@@ -17,10 +17,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from jim.config import settings
 from jim.web import auth_routes, chat_routes, garmin_routes, playbook_routes
+from jim.web.deps import _current_user
 from jim.web.templates import LOGIN_PAGE
 
 log = logging.getLogger(__name__)
@@ -129,3 +130,12 @@ def manifest() -> JSONResponse:
 @app.get("/login")
 def login_page() -> Response:
     return HTMLResponse(LOGIN_PAGE)
+
+
+@app.get("/{path:path}")
+def catch_all(request: Request, path: str) -> Response:
+    """Any unrecognized GET path bounces to /login (or /chat if already signed
+    in) instead of a bare 404 — mirrors how /chat itself handles a signed-out
+    visit. Registered last so it never shadows a real route."""
+    dest = "/chat" if _current_user(request) is not None else "/login"
+    return RedirectResponse(dest, status_code=303)
