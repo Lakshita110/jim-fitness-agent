@@ -12,9 +12,9 @@ A personal training agent, multi-tenant: each signed-up account connects its
 own Garmin, edits its own playbook, and gets its own nightly housekeeping run.
 Plans come from talking to **Jim's chat** — a self-hosted page where the
 athlete reasons with Jim about the next session within their knee/ankle
-constraints (using real Garmin + a read-only Notion habit/knee log) and pushes
-structured workouts to Garmin on approve. Nightly housekeeping just keeps that
-history fresh — it never writes a plan itself.
+constraints (using real Garmin history) and pushes structured workouts to
+Garmin on approve. Nightly housekeeping just keeps that history fresh — it
+never writes a plan itself.
 Python 3.11+, FastAPI, Postgres, OpenRouter (via the `openai` SDK),
 `garminconnect`. No build step — the whole chat UI is one inline HTML string in
 `src/jim/web/templates.py`.
@@ -54,8 +54,6 @@ cp .env.example .env
 
 - `GARMIN_EMAIL`, `GARMIN_PASSWORD` — your Garmin login.
 - `OPENROUTER_API_KEY`, `TAVILY_API_KEY`.
-- `NOTION_TOKEN` — optional; leave blank to run without it (the Pain card and
-  Notion context just hide; everything else works).
 - `DATABASE_URL=postgresql://jim:jim@localhost:5432/jim`
 - `SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY` — long random strings (auth is
   now email+password at `/login`, not a shared URL key — see `docs/chat.md`).
@@ -86,15 +84,11 @@ sore today".
   Cloudflare — which is exactly why the serverless deploy uses a `GARMIN_TOKENS`
   blob instead). If login fails with a transport/`curl_cffi` error,
   `pip uninstall curl_cffi` so it falls back to plain `requests`.
-- **Notion API** needs `notion-client` 3.x — queries go through
-  `data_sources.query`, not the old `databases.query` (handled in
-  `src/jim/tools/notion.py`). Notion is **read-only** by design, and only the
-  habits/knee log is read.
 - **pgvector**: migration `002_research_corpus.sql` is skipped with a warning if
   the `vector` extension isn't installed. That only disables the research corpus;
   everything else runs.
-- **`fetch_state` degrades per-source** — a down integration (e.g. no Notion
-  token) won't blank Garmin/readiness; the affected cards just hide.
+- **`fetch_state` degrades per-source** — a down integration won't blank
+  Garmin/readiness; the affected cards just hide.
 - **State is cached for an hour.** After a backfill, clear it or the cards keep
   showing stale "no data": `python -c "from jim.db import kv_set; kv_set('state', None)"`.
 - **Nothing reaches the watch unattended.** Only the chat's push buttons

@@ -32,18 +32,6 @@ class GarminToday(BaseModel):
     resting_hr: int | None = None
 
 
-class NotionDay(BaseModel):
-    """Pain / PT / habits from the Notion Knee+Habit log."""
-
-    day: date
-    pain_level: int | None = None  # 0-10
-    pain_location: str = ""
-    pain_notes: str = ""
-    pt_done: bool = False
-    habits: dict[str, bool] = {}
-    day_score: float | None = None  # Notion formula returns a fraction (e.g. 0.5)
-
-
 class HistoryFeatures(BaseModel):
     """Deterministic features over a trailing window. Pure SQL/Python, no LLM."""
 
@@ -52,10 +40,6 @@ class HistoryFeatures(BaseModel):
     weekly_volume_min: float = 0.0
     muscle_group_balance: dict[str, float] = {}  # group -> fraction of weekly volume
     days_since_legs: int | None = None
-    pain_trend: float = 0.0  # slope of pain_level over window; >0 = worsening
-    # Most recent dated pain notes, newest first — the words behind the trend,
-    # so a recurring complaint ("wrists still poor") is visible, not just a slope.
-    recent_pain_notes: list[str] = []
     avg_readiness: float | None = None
 
 

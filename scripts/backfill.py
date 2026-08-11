@@ -1,6 +1,5 @@
-"""M2 backfill: pull ~90 days of Garmin daily metrics + activities, plus the
-Notion knee/habit log, into Postgres so query_history has a real window.
-Idempotent (upserts).
+"""M2 backfill: pull ~90 days of Garmin daily metrics + activities into
+Postgres so query_history has a real window. Idempotent (upserts).
 
     python scripts/backfill.py [days]
 """
@@ -11,24 +10,10 @@ from datetime import date, timedelta
 
 from jim.auth import first_user_id
 from jim.db import connect, migrate
-from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets, store_notion_log
+from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets
 from jim.tools.garmin import get_exercise_sets, get_garmin_today
-from jim.tools.notion import get_notion_logs_range
 
 log = logging.getLogger(__name__)
-
-
-def backfill_notion(conn, user_id: int, start: date, end: date) -> int:
-    """Pull the whole window's knee/habit log in one paged range query.
-
-    Pain level/location/notes are what Jim actually plans around, so a Garmin-only
-    backfill leaves the history blind to every past flare-up.
-    """
-    days = get_notion_logs_range(user_id, start, end)
-    for notion in days:
-        store_notion_log(conn, user_id, notion)
-    conn.commit()
-    return len(days)
 
 
 def main(days: int = 90) -> None:
@@ -39,8 +24,6 @@ def main(days: int = 90) -> None:
         user_id = first_user_id()
         if user_id is None:
             raise SystemExit("no users in the database — run scripts/backfill_users.py first")
-        n = backfill_notion(conn, user_id, today - timedelta(days=days), today)
-        log.info("backfilled %d notion log days", n)
         for offset in range(days, -1, -1):
             day = today - timedelta(days=offset)
             snapshot = get_garmin_today(user_id, day)

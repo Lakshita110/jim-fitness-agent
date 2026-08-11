@@ -84,8 +84,6 @@ Project → **Settings → Environment Variables**:
 | `CRON_SECRET` | the other random string from step 1 |
 | `GARMIN_TOKENS` | the session blob from step 1 |
 | `GARMIN_EMAIL` | your Garmin email |
-| `NOTION_TOKEN` | from `.env` |
-| `NOTION_KNEE_LOG_DB_ID` | `b872f62a28604573980e983be6fd3143` |
 | `OPENROUTER_API_KEY` | from `.env` |
 | `TAVILY_API_KEY` | from `.env` |
 | `APP_TIMEZONE` | `Europe/Berlin` |

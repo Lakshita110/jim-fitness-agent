@@ -4,9 +4,9 @@ Jim is a personal training agent, multi-tenant: any number of athletes sign up
 with email + password, each connecting their own Garmin account and editing
 their own playbook. Plans are built by talking to a coach in chat, which
 reasons about the next session within that athlete's knee/ankle constraints
-using real Garmin history plus a read-only Notion habit/knee log. A nightly
-cron keeps that history fresh (sync, reconcile, cleanup) but never writes a
-plan itself; workouts reach the watch only when the athlete presses a button.
+using real Garmin history. A nightly cron keeps that history fresh (sync,
+reconcile, cleanup) but never writes a plan itself; workouts reach the watch
+only when the athlete presses a button.
 Not a product — real accounts and real per-user isolation, but one deployment,
 one Postgres, one operator.
 
@@ -24,19 +24,18 @@ one Postgres, one operator.
 | `src/jim/agent/validate.py` | The hard guardrail — read the docstring before editing | active |
 | `src/jim/tools/garmin.py` | Garmin reads/writes + workout scheduling | active |
 | `src/jim/tools/exercise_match.py` | LLM fallback for unmatched exercise names, validated against the vendored taxonomy | active |
-| `src/jim/tools/notion.py` | Read-only Notion habit/knee log | active |
 | `src/jim/tools/history.py` | Deterministic features + readiness read | active |
 | `src/jim/tools/research.py` | Gated corpus/Tavily research | active |
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | active |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | active |
-| `src/jim/migrations/001–008_*.sql` | Additive, idempotent, never edited after applied | active |
+| `src/jim/migrations/001–009_*.sql` | Additive, idempotent, never edited after applied | active |
 | `src/jim/data/garmin_exercises.json` | Vendored Garmin exercise taxonomy | active |
 | `playbook/{base_workouts.yaml,directives.md,pt_routines.yaml}` | The real athlete's committed content (real `garmin_workout_id`s, knee-specific PT) | active |
 | `playbook/defaults/*` | Intentionally empty/generic seed for new signups | active |
 | `data/corpus/*` | Research corpus source + template | needs-review — not traced to `research.py` ingestion path this session |
 | `scripts/backfill_users.py` | One-off: creates the original athlete's user row, seeds their playbook, backfills `user_id` onto pre-multi-tenant rows. Not idempotent by design | active (one-off, already run) |
-| `scripts/backfill.py` | Repeatable ~90-day Garmin + Notion history backfill for an existing user. Idempotent | active |
+| `scripts/backfill.py` | Repeatable ~90-day Garmin history backfill for an existing user. Idempotent | active |
 | `scripts/exercise_map.py`, `garmin_login.py`, `make_icon.py`, `refresh_garmin_exercises.py`, `seed_corpus.py` | Ops/dev utilities | needs-review — not individually verified this session |
 | `scripts/m1_roundtrip.py` | Standalone dev CLI, named for an early single-user milestone; referenced only in `README.md` and a comment in `auth.py`, never imported | stale — likely safe to remove, confirm before deleting |
 | `tests/*` | Offline, fixture/fake-driven, one file per module + `test_multi_user_isolation.py` (load-bearing) | active |
@@ -65,7 +64,7 @@ The two backfill scripts are sequential, not redundant: `backfill_users.py`
 runs once to migrate the original athlete into the multi-tenant schema
 (creates their user row, seeds their playbook from disk, backfills `user_id`
 onto legacy NULL rows); `backfill.py` runs repeatably afterward to pull
-rolling Garmin/Notion history for an existing user.
+rolling Garmin history for an existing user.
 
 ## Commands
 

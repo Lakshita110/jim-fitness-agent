@@ -1,4 +1,4 @@
-"""Deterministic guardrail — runs before any Notion/Garmin write (PLAN.md §7).
+"""Deterministic guardrail — runs before any Garmin write (PLAN.md §7).
 
 Rejecting returns the violations so the agent can revise once, then fall back
 to a conservative session. No LLM involvement: these are hard constraints.

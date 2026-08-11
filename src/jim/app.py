@@ -67,7 +67,7 @@ def cron_nightly(request: Request) -> dict:
 
     Vercel authenticates scheduled invocations with `Authorization: Bearer
     $CRON_SECRET`. Without a configured secret this endpoint stays shut — an open
-    one would let anyone trigger Garmin/Notion syncs for every account on demand.
+    one would let anyone trigger Garmin syncs for every account on demand.
     """
     secret = settings().cron_secret
     header = request.headers.get("authorization", "")

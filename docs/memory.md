@@ -61,12 +61,6 @@ reps, kg — synced nightly, backfillable). This is what Jim *learns from*: in
 chat it looks up `exercise_history("goblet squat")` before prescribing a
 weight and progresses from what you actually lifted.
 
-## Notion: read source only
-
-Jim reads the habits/knee log (pain, PT adherence, habits) — nothing else. It
-never writes to Notion, and does not read Notion tasks (Garmin covers
-scheduling).
-
 ## Quick "how do I…"
 
 - **Standing rule** → edit `playbook/directives.md`.

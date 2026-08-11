@@ -69,15 +69,8 @@ until you hit Push to Garmin**.
   **pushed** or **modified** (edited since it went to the watch). Days you plan
   in chat are marked `source='chat'`.
 
-## Notion's role
-
-Read-only, and only the habits/knee log. Jim never writes to Notion, and does
-not read Notion tasks — scheduling context comes from Garmin. The `tasks `,
-`training check-in`, and `training proposals` databases are dormant — delete
-them in Notion whenever you like.
-
 ## Cost discipline
 
-State (Garmin recovery, history features, Notion log) is snapshotted once and
-cached for an hour, so a chat turn is a single cheap LLM call; a validator
-rejection adds at most one more.
+State (Garmin recovery, history features) is snapshotted once and cached for
+an hour, so a chat turn is a single cheap LLM call; a validator rejection adds
+at most one more.

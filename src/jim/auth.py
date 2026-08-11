@@ -3,7 +3,7 @@ signed/expiring tokens via itsdangerous — no server-side session store, matchi
 the app's existing DB-free session model.
 
 Scope note: this module only proves "who is this request." It does not thread
-user_id through Garmin/Notion/kv/coach — that's Phase 3. There is still only one
+user_id through Garmin/kv/coach — that's Phase 3. There is still only one
 real athlete's data in the system; a logged-in user authenticates as themselves,
 but the business logic underneath is still global."""
 

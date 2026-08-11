@@ -1,5 +1,5 @@
-"""App-level encryption for credentials at rest (Garmin passwords/tokens,
-Notion tokens in `user_credentials`). Postgres `pgcrypto` was rejected because
+"""App-level encryption for credentials at rest (Garmin passwords/tokens
+in `user_credentials`). Postgres `pgcrypto` was rejected because
 it needs the key passed in every SQL statement, which risks it landing in
 query logs; encrypting in the app instead keeps the key only in process
 memory, matching the existing trust model where secrets live in env vars and

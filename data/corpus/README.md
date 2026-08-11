@@ -17,8 +17,7 @@ Body text… (split on blank lines; ~1500-char chunks)
 
 - [ ] **PT protocol** — the actual prescribed knee/ankle protocol from PT.
       Highest priority: fill in `pt_protocol_TEMPLATE.md` and rename it to
-      `pt_protocol.md`. (Checked Notion: only PT *expense* entries exist,
-      no written protocol.)
+      `pt_protocol.md`.
 - [ ] Patellofemoral pain load-management guidance (e.g. the JOSPT
       patellofemoral pain clinical practice guideline).
 - [ ] Isometric protocols for tendon/knee pain (e.g. Rio et al. style

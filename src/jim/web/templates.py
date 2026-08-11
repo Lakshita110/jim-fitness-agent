@@ -169,7 +169,6 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
                 opacity: .5; pointer-events: none; }
 .card.ready { --glow: rgba(180,206,158,.28); }
 .card.next  { --glow: rgba(231,181,124,.24); }
-.card.pain  { --glow: rgba(217,140,122,.26); }
 .c-label { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600;
            letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
 .c-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
@@ -412,11 +411,6 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
         <div class="c-main" id="cnMain">—</div>
         <div class="c-sub" id="cnSub"></div>
       </div>
-      <div class="card pain" id="cardPain" hidden>
-        <div class="c-label">Pain check</div>
-        <div class="c-main" id="cpMain">—</div>
-        <div class="c-sub" id="cpSub"></div>
-      </div>
     </div>
     <div id="log"></div>
     <form id="f">
@@ -458,7 +452,7 @@ const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const BADGE = { pushed: ["on", "on watch"], modified: ["mod", "re-push"] };
 const rowSig = new Map();
 const openDays = new Set();
-let curReadiness = null, curPain = null, serverToday = null;
+let curReadiness = null, serverToday = null;
 let curPushStatus = {}, curDraft = [], scopeDate = null;
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -513,17 +507,6 @@ function renderCards(draft) {
     document.getElementById("cnMain").textContent = "Nothing planned";
     document.getElementById("cnSub").textContent = "ask me to plan your week";
   }
-
-  const cp = document.getElementById("cardPain");
-  if (curPain && (curPain.level != null || curPain.location || curPain.notes)) {
-    cp.hidden = false;
-    document.getElementById("cpMain").innerHTML = (curPain.level != null)
-      ? `<span class="num">${curPain.level}/10</span>` : esc(curPain.location || curPain.notes);
-    const sub = [];
-    if (curPain.level != null && curPain.location) sub.push(curPain.location);
-    if (curPain.notes && curPain.notes !== (curPain.level != null ? "" : curPain.location)) sub.push(curPain.notes);
-    document.getElementById("cpSub").textContent = sub.join(" · ");
-  } else { cp.hidden = true; }
 }
 
 /* --- hero (empty-chat state) --- */
@@ -737,7 +720,6 @@ async function load() {
     const s = await r.json();
     if (!r.ok) { add("bot", s.detail || "error"); return; }
     curReadiness = s.readiness || null;
-    curPain = s.pain || null;
     curPushStatus = s.push_status || {};
     serverToday = s.today || serverToday;
     if (!s.history.length) showHero();

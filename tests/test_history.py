@@ -7,8 +7,6 @@ from jim.tools.history import (
     compute_readiness,
     days_since_legs,
     muscle_group_balance,
-    pain_trend,
-    recent_pain_notes,
     weekly_volume_min,
 )
 
@@ -121,55 +119,9 @@ def test_days_since_legs():
     assert days_since_legs([act(date(2026, 7, 1), "running", 30)], AS_OF) is None
 
 
-def test_pain_trend_positive_when_worsening():
-    logs = [
-        {"day": date(2026, 7, d), "pain_level": p}
-        for d, p in [(1, 1), (2, 2), (3, 2), (4, 3), (5, 4)]
-    ]
-    assert pain_trend(logs) > 0.5
-
-
-def test_pain_trend_handles_sparse_data():
-    assert pain_trend([]) == 0.0
-    assert pain_trend([{"day": AS_OF, "pain_level": 3}]) == 0.0
-    assert pain_trend([{"day": AS_OF, "pain_level": None}] * 5) == 0.0
-
-
-def test_recent_pain_notes_are_newest_first_with_context():
-    logs = [
-        {"day": date(2026, 7, 4), "pain_level": 3, "pain_location": "right",
-         "pain_notes": "might've been triggered by driving"},
-        {"day": date(2026, 7, 6), "pain_level": 5, "pain_location": "wrists",
-         "pain_notes": "wrists still poor"},
-        {"day": date(2026, 7, 5), "pain_level": None, "pain_location": "",
-         "pain_notes": "   "},                                   # blank note skipped
-        {"day": date(2026, 7, 3), "pain_level": 2, "pain_location": "left",
-         "pain_notes": ""},                                      # no note skipped
-    ]
-    notes = recent_pain_notes(logs)
-    assert notes == [
-        "2026-07-06 (wrists, 5/10): wrists still poor",
-        "2026-07-04 (right, 3/10): might've been triggered by driving",
-    ]
-
-
-def test_recent_pain_notes_caps_the_list():
-    logs = [{"day": date(2026, 7, i), "pain_level": 1, "pain_location": "knee",
-             "pain_notes": f"note {i}"} for i in range(1, 12)]
-    notes = recent_pain_notes(logs)
-    assert len(notes) == 6                 # MAX_PAIN_NOTES
-    assert notes[0].startswith("2026-07-11")   # newest first
-
-
-def test_recent_pain_notes_tolerates_missing_fields():
-    assert recent_pain_notes([{"day": date(2026, 7, 6)}]) == []
-    assert recent_pain_notes([]) == []
-
-
 def test_compute_features_assembles_everything():
-    logs = [{"day": date(2026, 7, d), "pain_level": d % 3} for d in range(1, 7)]
     daily = [{"day": AS_OF, "readiness": 60}, {"day": date(2026, 7, 5), "readiness": 40}]
-    f = compute_features(AS_OF, 28, ACTIVITIES, logs, daily)
+    f = compute_features(AS_OF, 28, ACTIVITIES, daily)
     assert f.weekly_volume_min == 115
     assert f.days_since_legs == 0
     assert f.avg_readiness == 50
@@ -182,13 +134,13 @@ def test_avg_readiness_falls_back_to_body_battery():
         {"day": AS_OF, "readiness": None, "body_battery": 70},
         {"day": date(2026, 7, 5), "readiness": None, "body_battery": 30},
     ]
-    f = compute_features(AS_OF, 28, [], [], daily)
+    f = compute_features(AS_OF, 28, [], daily)
     assert f.avg_readiness == 50
 
 
 def test_avg_readiness_prefers_readiness_when_present():
     daily = [{"day": AS_OF, "readiness": 80, "body_battery": 20}]
-    assert compute_features(AS_OF, 28, [], [], daily).avg_readiness == 80
+    assert compute_features(AS_OF, 28, [], daily).avg_readiness == 80
 
 
 # --- load & readiness verdict ---------------------------------------------

@@ -54,12 +54,6 @@ class Settings(BaseSettings):
     # doesn't exist. When set, this is used instead of the on-disk token store.
     garmin_tokens: str = ""
 
-    notion_token: str = ""
-    # Real database ID discovered from the workspace (overridable via env).
-    # Notion is READ-ONLY and only supplies the "habits db" (knee+habit log);
-    # scheduling context comes from Garmin, so there is no tasks DB.
-    notion_knee_log_db_id: str = "b872f62a28604573980e983be6fd3143"
-
     openrouter_api_key: str = ""
     tavily_api_key: str = ""
 

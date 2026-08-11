@@ -15,10 +15,10 @@ State is deliberately simple — everything lives in the kv store:
 - 'chat_history': last HISTORY_LIMIT messages [{role, content}]
 - 'draft': the working plan, a list of StructuredSession dicts (dated days)
 - 'goals': plain-text long-term goals block, rewritten by the model on request
-- 'state': cached day snapshot (garmin/notion/features), refreshed hourly
+- 'state': cached day snapshot (garmin/features), refreshed hourly
 
 Deps are injected (`CoachDeps`) so everything unit-tests without Postgres,
-Garmin, Notion, or an LLM."""
+Garmin, or an LLM."""
 
 import hashlib
 import json
@@ -131,14 +131,7 @@ Hard rules (never violate, even if asked):
 - Never program: {forbidden}.
 - Keep any session under {max_min} minutes.
 - Leg sessions need at least {leg_gap} days since the last leg session.
-- Respect pain and low readiness: prefer PT, mobility, or easy conditioning on bad days.
-
-PAIN: the athlete's own log is the source of truth — "pain_level" (0-10),
-"pain_location", and "pain_notes". Read the notes, not just the number:
-"recent_pain_notes" in the features is their recent history, newest first. If
-the same complaint keeps recurring, name it and work around that joint rather
-than re-prescribing what keeps aggravating it. ("day_score" is habit tracking —
-it says nothing about pain or training; ignore it when planning.)
+- Respect low readiness: prefer PT, mobility, or easy conditioning on bad days.
 
 LOAD & READINESS: TODAY'S STATE includes a "readiness" read (acute:chronic
 workload ratio + recovery). Let its "status" steer intensity — push = room to
@@ -204,7 +197,7 @@ class CoachDeps:
 
     kv_get: Callable[[str], Any]
     kv_set: Callable[[str, Any], None]
-    fetch_state: Callable[[], dict]  # fresh garmin/notion/features snapshot
+    fetch_state: Callable[[], dict]  # fresh garmin/features snapshot
     # (messages, tool_schemas|None) -> {"content": str|None, "tool_calls": [...]|None}
     llm: Callable[[list[dict], list[dict] | None], dict]
     lookup_tools: dict[str, Callable[..., str]]  # name -> callable, see TOOL_SCHEMAS
@@ -229,7 +222,7 @@ class CoachDeps:
         from jim.config import settings
         from jim.db import kv_get, kv_set
         from jim.playbook import load_playbook
-        from jim.tools import garmin, memory, notion
+        from jim.tools import garmin, memory
         from jim.tools.history import (
             exercise_history,
             query_history,
@@ -242,11 +235,10 @@ class CoachDeps:
 
         def fetch_state() -> dict:
             today = now().date()
-            # Each source degrades independently — a down integration (e.g. an
-            # unshared Notion) must not blank Garmin, features, or readiness.
+            # Each source degrades independently — a down integration must
+            # not blank Garmin, features, or readiness.
             sources = {
                 "garmin": lambda: garmin.get_garmin_today(user_id, today),
-                "notion": lambda: notion.get_notion_logs(user_id, today),
                 "features": lambda: query_history(user_id, today),
                 "readiness": lambda: readiness_read(user_id, today),
                 # dates serialized to ISO here — the kv store and the prompt's
@@ -816,26 +808,13 @@ def clear(user_id: int, deps: CoachDeps | None = None) -> None:
 
 def current_state(user_id: int, deps: CoachDeps | None = None) -> dict:
     """What the UI shows on load: recent messages + working draft + goals,
-    plus the readiness verdict and latest pain read for the stat cards."""
+    plus the readiness verdict for the stat cards."""
     deps = deps or CoachDeps.live(user_id)
     readiness = None
-    pain = None
     try:  # a state hiccup must never break the page load
         state = _cached_state(deps)
         _maybe_sync_calendar(deps, state)
         readiness = state.get("readiness")
-        notion = state.get("notion") or {}
-        if (
-            notion.get("pain_level") is not None
-            or notion.get("pain_location")
-            or notion.get("pain_notes")
-        ):
-            pain = {
-                "level": notion.get("pain_level"),
-                "location": notion.get("pain_location") or "",
-                "notes": notion.get("pain_notes") or "",
-                "day": notion.get("day"),
-            }
     except Exception:
         log.exception("state read failed for current_state")
     draft = deps.kv_get("draft") or []
@@ -845,6 +824,5 @@ def current_state(user_id: int, deps: CoachDeps | None = None) -> dict:
         "push_status": _push_status(deps, _parse_draft(draft, deps.now().date())),
         "goals": deps.kv_get("goals") or "",
         "readiness": readiness,
-        "pain": pain,
         "today": deps.now().date().isoformat(),
     }

@@ -78,7 +78,7 @@ def kv_set(user_id: int, key: str, value: Any) -> None:
         conn.commit()
 
 
-_CRED_FIELDS = ("garmin_password", "garmin_tokens", "notion_token")
+_CRED_FIELDS = ("garmin_password", "garmin_tokens")
 
 
 def get_user_credentials(user_id: int) -> dict | None:
@@ -99,17 +99,13 @@ def get_user_credentials(user_id: int) -> dict | None:
     out["garmin_tokens"] = (
         crypto.decrypt(row["garmin_tokens_enc"]) if row.get("garmin_tokens_enc") else None
     )
-    out["notion_token"] = (
-        crypto.decrypt(row["notion_token_enc"]) if row.get("notion_token_enc") else None
-    )
     return out
 
 
 def save_user_credentials(user_id: int, **fields: Any) -> None:
     """Upsert whichever credential fields are passed, encrypting the
-    plaintext-named ones (`garmin_password`, `garmin_tokens`, `notion_token`)
-    into their `_enc` columns. Other fields (`garmin_email`,
-    `notion_knee_log_db_id`) are stored as-is."""
+    plaintext-named ones (`garmin_password`, `garmin_tokens`) into their
+    `_enc` columns. Other fields (`garmin_email`) are stored as-is."""
     from jim import crypto
 
     cols: list[str] = []

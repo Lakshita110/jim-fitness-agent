@@ -23,7 +23,7 @@ from jim.playbook import _load_playbook_from_disk
 # Tables carrying a nullable user_id (007_users.sql) that must be backfilled
 # before 008_user_pks.sql can promote it into a composite primary key.
 BACKFILL_TABLES = (
-    "garmin_daily", "garmin_activities", "notion_daily_log", "features_daily",
+    "garmin_daily", "garmin_activities", "features_daily",
     "suggestions", "outcomes", "exercise_sets", "kv",
 )
 
@@ -54,14 +54,12 @@ def main() -> None:
     with connect() as conn:
         conn.execute(
             "UPDATE user_credentials SET garmin_email = %s, garmin_password_enc = %s,"
-            " garmin_tokens_enc = %s, notion_token_enc = %s, notion_knee_log_db_id = %s,"
+            " garmin_tokens_enc = %s,"
             " updated_ts = now() WHERE user_id = %s",
             (
                 s.garmin_email or None,
                 crypto.encrypt(s.garmin_password) if s.garmin_password else None,
                 crypto.encrypt(s.garmin_tokens) if s.garmin_tokens else None,
-                crypto.encrypt(s.notion_token) if s.notion_token else None,
-                s.notion_knee_log_db_id or None,
                 user.id,
             ),
         )
@@ -103,7 +101,6 @@ def main() -> None:
                 ("garmin_email", bool(s.garmin_email)),
                 ("garmin_password", bool(s.garmin_password)),
                 ("garmin_tokens", bool(s.garmin_tokens)),
-                ("notion_token", bool(s.notion_token)),
             )
             if present
         )

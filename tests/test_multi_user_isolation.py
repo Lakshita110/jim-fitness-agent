@@ -36,7 +36,6 @@ _JSON_COLUMNS = {
     "kv": {"value"},
     "playbooks": {"rotation", "workouts", "pt_routines"},
     "suggestions": {"plan"},
-    "notion_daily_log": {"habits"},
     "garmin_daily": {"raw"},
     "garmin_activities": {"summary"},
 }
@@ -187,15 +186,6 @@ def _insert_garmin_activity(db: FakeDB, user_id: int, activity_id: str, day: dat
         )
 
 
-def _insert_notion_log(db: FakeDB, user_id: int, day: date, pain_level: int) -> None:
-    with FakeConn(db) as conn:
-        conn.execute(
-            "INSERT INTO notion_daily_log (user_id, day, pain_level, pain_location, pain_notes)"
-            " VALUES (%s, %s, %s, %s, %s)",
-            (user_id, day, pain_level, "knee", "note"),
-        )
-
-
 def _insert_exercise_set(db: FakeDB, user_id: int, activity_id: str, day: date) -> None:
     with FakeConn(db) as conn:
         conn.execute(
@@ -227,7 +217,7 @@ def test_kv_same_key_different_users_do_not_collide(fake_db):
     assert kv_get(2, "draft") == "B's draft"
 
 
-# --- garmin/notion/exercise-set history rows ---------------------------------
+# --- garmin/exercise-set history rows ----------------------------------------
 
 
 def test_garmin_daily_row_invisible_across_users(fake_db):
@@ -250,14 +240,6 @@ def test_garmin_activity_and_exercise_set_rows_invisible_across_users(fake_db):
     assert "no logged sets" in summary
     # the owner still sees it, proving this is isolation, not a broken query
     assert "no logged sets" not in exercise_history(1, "goblet squat", days=180)
-
-
-def test_notion_log_row_invisible_across_users(fake_db):
-    day = date(2026, 7, 10)
-    _insert_notion_log(fake_db, 1, day, pain_level=7)
-    features = query_history(2, day, window_days=28)
-    assert features.pain_trend == 0.0
-    assert features.recent_pain_notes == []
 
 
 # --- playbook ------------------------------------------------------------

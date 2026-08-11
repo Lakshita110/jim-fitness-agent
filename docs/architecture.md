@@ -9,7 +9,6 @@ flowchart TB
     subgraph you["You"]
         WATCH["Garmin watch"]
         PHONE["Phone — Jim's chat<br/>(add-to-home-screen page)"]
-        NOTIONAPP["Notion<br/>(habit journal, tasks)"]
     end
 
     subgraph vercel["Vercel"]
@@ -20,14 +19,14 @@ flowchart TB
         end
         CRON["nightly cron 20:00 UTC<br/>/api/cron/nightly → run_nightly()<br/>housekeeping only, fans out over<br/>every nightly_enabled user"]
         subgraph pg["Postgres"]
-            USERS["users · user_credentials (Garmin/Notion,<br/>AES-GCM encrypted) · playbooks"]
+            USERS["users · user_credentials (Garmin,<br/>AES-GCM encrypted) · playbooks"]
             KV["kv (user_id, key): chat history ·<br/>working draft · goals · pushed map · state cache"]
-            TABLES["garmin_daily · activities ·<br/>exercise_sets (reps+kg per set) ·<br/>notion_daily_log · suggestions ·<br/>outcomes · research_corpus<br/>— all user_id-scoped"]
+            TABLES["garmin_daily · activities ·<br/>exercise_sets (reps+kg per set) ·<br/>suggestions · outcomes ·<br/>research_corpus<br/>— all user_id-scoped"]
         end
     end
 
     subgraph loop["shared reasoning tools"]
-        STATE["state tools<br/>garmin.py · notion.py (read-only) ·<br/>history.py features + readiness"]
+        STATE["state tools<br/>garmin.py ·<br/>history.py features + readiness"]
         VALIDATE["validate.py<br/>HARD (rejects): forbidden moves ·<br/>session length · step cap · leg spacing<br/>ADVISORY: balance notes<br/>(revise once, then fallback)"]
         PLAYBOOK["playbook/ (git)<br/>A/B/C base workouts ·<br/>PT home+gym · directives.md"]
     end
@@ -42,9 +41,8 @@ flowchart TB
 
     WATCH -->|"activities, HRV, sleep,<br/>per-set reps & weights"| GARMINAPI
     GARMINAPI -->|"nightly sync + backfill"| TABLES
-    NOTIONAPP -->|"READ ONLY"| STATE
 
-    CRON -->|"sync Garmin/Notion"| TABLES
+    CRON -->|"sync Garmin"| TABLES
     CRON -->|"reconcile + sweep<br/>stale adaptations"| KV
     STATE --> COACH
     PLAYBOOK --> COACH
@@ -73,11 +71,11 @@ goblet squats," it calls `exercise_history("goblet squat")`, sees
 **Nightly** (`jobs/nightly.py`, Vercel Cron at 20:00 UTC — deliberately after
 the training day) — housekeeping only, no plan is written here. `run_nightly()`
 selects every `users` row with `nightly_enabled = true` and runs the per-user
-pipeline for each in turn: sync today's Garmin + Notion into Postgres (that
+pipeline for each in turn: sync today's Garmin into Postgres (that
 user's own credentials, that user's own `users.timezone` for "today") → sweep
 stale one-off Garmin adaptations whose day has passed (built by chat, never
 promoted into the playbook) → reconcile today's plan vs. actuals for the
-adherence signal. One user's failure (expired Garmin creds, Notion down, a
+adherence signal. One user's failure (expired Garmin creds, a
 Garmin hiccup during cleanup) is caught and logged at the per-user boundary —
 it doesn't stop the rest of the run. The whole run must finish inside the
 function's `maxDuration`, so it returns `elapsed_sec` alongside a per-user
@@ -108,13 +106,13 @@ push*.
 One deployment, one Postgres, any number of `users` rows — isolation is
 enforced by `user_id`, not by separate databases. `users` holds login +
 `timezone` + `nightly_enabled`; `user_credentials` holds each account's Garmin
-email/password and Notion token, AES-GCM encrypted at rest
+email/password, AES-GCM encrypted at rest
 (`crypto.py`, key in `CREDENTIAL_ENCRYPTION_KEY`, never in the DB); `playbooks`
 holds one JSONB row per account (base workouts, PT routines, rotation,
 directives — edited via `/api/playbook`, seeded generic at signup). Every
 history table (`kv`, `garmin_daily`, `garmin_activities`, `exercise_sets`,
-`notion_daily_log`, `suggestions`, `outcomes`) carries `user_id` as part of its
-primary key. `tools/garmin.py`/`tools/notion.py` keep a per-`user_id` client
+`suggestions`, `outcomes`) carries `user_id` as part of its
+primary key. `tools/garmin.py` keeps a per-`user_id` client
 cache (a plain dict, since each serverless instance is single-process); every
 `Toolbox`/`CoachDeps` lambda closes over the `user_id` it was built for.
 

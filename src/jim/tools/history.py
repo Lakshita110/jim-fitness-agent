@@ -117,52 +117,10 @@ def days_since_legs(activities: list[dict[str, Any]], as_of: date) -> int | None
     return (as_of - max(leg_days)).days
 
 
-def pain_trend(logs: list[dict[str, Any]]) -> float:
-    """Least-squares slope of pain_level over the window (points/day).
-
-    Positive = worsening. Rows without a pain_level are skipped."""
-    points = [
-        (log["day"].toordinal(), float(log["pain_level"]))
-        for log in logs
-        if log.get("pain_level") is not None
-    ]
-    if len(points) < 2:
-        return 0.0
-    n = len(points)
-    mean_x = sum(x for x, _ in points) / n
-    mean_y = sum(y for _, y in points) / n
-    denom = sum((x - mean_x) ** 2 for x, _ in points)
-    if denom == 0:
-        return 0.0
-    return sum((x - mean_x) * (y - mean_y) for x, y in points) / denom
-
-
-MAX_PAIN_NOTES = 6
-
-
-def recent_pain_notes(logs: list[dict[str, Any]], limit: int = MAX_PAIN_NOTES) -> list[str]:
-    """The words behind the pain trend: newest-first dated notes, e.g.
-    "2026-07-11 (right, 3/10): might've been triggered by driving".
-
-    A slope can't tell you the same complaint recurred three days running; the
-    notes can. Days with no note are skipped."""
-    noted = [log for log in logs if (log.get("pain_notes") or "").strip()]
-    noted.sort(key=lambda log: log["day"], reverse=True)
-    lines = []
-    for log in noted[:limit]:
-        bits = [b for b in (log.get("pain_location") or "",
-                            f"{log['pain_level']}/10" if log.get("pain_level") is not None else "")
-                if b]
-        where = f" ({', '.join(bits)})" if bits else ""
-        lines.append(f"{log['day']}{where}: {log['pain_notes'].strip()}")
-    return lines
-
-
 def compute_features(
     as_of: date,
     window_days: int,
     activities: list[dict[str, Any]],
-    logs: list[dict[str, Any]],
     daily: list[dict[str, Any]],
 ) -> HistoryFeatures:
     """Pure assembly of all deterministic features from pre-fetched rows."""
@@ -180,8 +138,6 @@ def compute_features(
         weekly_volume_min=weekly_volume_min(activities, as_of),
         muscle_group_balance=muscle_group_balance(activities, as_of),
         days_since_legs=days_since_legs(activities, as_of),
-        pain_trend=pain_trend(logs),
-        recent_pain_notes=recent_pain_notes(logs),
         avg_readiness=(sum(readiness) / len(readiness)) if readiness else None,
     )
 
@@ -204,11 +160,6 @@ def query_history(user_id: int, as_of: date, window_days: int = 28) -> HistoryFe
             " WHERE user_id = %s AND day BETWEEN %s AND %s",
             (user_id, start, as_of),
         ).fetchall()
-        logs = conn.execute(
-            "SELECT day, pain_level, pain_location, pain_notes FROM notion_daily_log"
-            " WHERE user_id = %s AND day BETWEEN %s AND %s",
-            (user_id, start, as_of),
-        ).fetchall()
         daily = conn.execute(
             "SELECT day, readiness, body_battery FROM garmin_daily"
             " WHERE user_id = %s AND day BETWEEN %s AND %s",
@@ -223,7 +174,7 @@ def query_history(user_id: int, as_of: date, window_days: int = 28) -> HistoryFe
     for a in activities:
         a["exercises"] = by_activity.get(a["activity_id"], [])
 
-    return compute_features(as_of, window_days, activities, logs, daily)
+    return compute_features(as_of, window_days, activities, daily)
 
 
 # --- load & readiness (a planning verdict, not a dashboard) -----------------

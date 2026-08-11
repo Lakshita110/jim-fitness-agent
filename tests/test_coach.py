@@ -338,9 +338,8 @@ def test_clear_resets_history_but_keeps_draft_and_goals():
     assert state["history"] == []
     assert len(state["draft"]) == 1
     assert state["goals"] == "keep me"
-    # new stat-card keys are present and null-safe when Garmin/Notion are absent
+    # new stat-card keys are present and null-safe when Garmin is absent
     assert state["readiness"] is None
-    assert state["pain"] is None
 
 
 def test_lookup_tool_round_feeds_result_back():
@@ -584,8 +583,7 @@ def test_calendar_source_failure_does_not_blank_other_sources(monkeypatch):
     import jim.db as db_mod
     import jim.tools.garmin as garmin_mod
     import jim.tools.history as history_mod
-    import jim.tools.notion as notion_mod
-    from jim.schemas import GarminToday, HistoryFeatures, NotionDay, ReadinessRead
+    from jim.schemas import GarminToday, HistoryFeatures, ReadinessRead
 
     store: dict = {}
     monkeypatch.setattr(db_mod, "kv_get", lambda user_id, key: store.get(key))
@@ -596,7 +594,6 @@ def test_calendar_source_failure_does_not_blank_other_sources(monkeypatch):
         raise RuntimeError("calendar down")
 
     monkeypatch.setattr(garmin_mod, "get_scheduled_workouts", boom)
-    monkeypatch.setattr(notion_mod, "get_notion_logs", lambda user_id, day: NotionDay(day=day))
     monkeypatch.setattr(history_mod, "query_history",
                          lambda user_id, day: HistoryFeatures(as_of=day, window_days=28))
     monkeypatch.setattr(history_mod, "readiness_read",
@@ -605,7 +602,7 @@ def test_calendar_source_failure_does_not_blank_other_sources(monkeypatch):
     deps = CoachDeps.live(1)
     state = deps.fetch_state()
     assert "calendar" not in state  # the only source that failed
-    assert "garmin" in state and "notion" in state
+    assert "garmin" in state
     assert "features" in state and "readiness" in state
 
 
@@ -613,8 +610,7 @@ def test_calendar_source_populates_state_with_iso_dates(monkeypatch):
     import jim.db as db_mod
     import jim.tools.garmin as garmin_mod
     import jim.tools.history as history_mod
-    import jim.tools.notion as notion_mod
-    from jim.schemas import GarminToday, HistoryFeatures, NotionDay, ReadinessRead
+    from jim.schemas import GarminToday, HistoryFeatures, ReadinessRead
 
     store: dict = {}
     monkeypatch.setattr(db_mod, "kv_get", lambda user_id, key: store.get(key))
@@ -624,7 +620,6 @@ def test_calendar_source_populates_state_with_iso_dates(monkeypatch):
         garmin_mod, "get_scheduled_workouts",
         lambda user_id, start, end: [{"date": start, "workout_id": "1", "title": "Lift"}],
     )
-    monkeypatch.setattr(notion_mod, "get_notion_logs", lambda user_id, day: NotionDay(day=day))
     monkeypatch.setattr(history_mod, "query_history",
                          lambda user_id, day: HistoryFeatures(as_of=day, window_days=28))
     monkeypatch.setattr(history_mod, "readiness_read",
@@ -644,9 +639,8 @@ def test_cached_state_reuses_calendar_within_the_ttl(monkeypatch):
     import jim.db as db_mod
     import jim.tools.garmin as garmin_mod
     import jim.tools.history as history_mod
-    import jim.tools.notion as notion_mod
     from jim.coach import _cached_state
-    from jim.schemas import GarminToday, HistoryFeatures, NotionDay, ReadinessRead
+    from jim.schemas import GarminToday, HistoryFeatures, ReadinessRead
 
     store: dict = {}
     monkeypatch.setattr(db_mod, "kv_get", lambda user_id, key: store.get(key))
@@ -659,7 +653,6 @@ def test_cached_state_reuses_calendar_within_the_ttl(monkeypatch):
         return []
 
     monkeypatch.setattr(garmin_mod, "get_scheduled_workouts", scheduled)
-    monkeypatch.setattr(notion_mod, "get_notion_logs", lambda user_id, day: NotionDay(day=day))
     monkeypatch.setattr(history_mod, "query_history",
                          lambda user_id, day: HistoryFeatures(as_of=day, window_days=28))
     monkeypatch.setattr(history_mod, "readiness_read",

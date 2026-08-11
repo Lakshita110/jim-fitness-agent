@@ -4,11 +4,10 @@ A personal training agent, multi-tenant — each signed-up account (email +
 password) connects its own Garmin and edits its own playbook. Plans come from
 talking to **Jim's chat** — a lightweight self-hosted chat where the athlete
 reasons with Jim about the next session within their joint constraints (using
-real Garmin history + a read-only Notion habit log), iterates on the plan (or
-the whole week), keeps long-term goals in plain language, and pushes to Garmin
-with one button. Nightly housekeeping keeps that history fresh (Garmin/Notion
-sync, adherence reconcile, stale-workout cleanup) but never writes a plan
-itself.
+real Garmin history), iterates on the plan (or the whole week), keeps
+long-term goals in plain language, and pushes to Garmin with one button.
+Nightly housekeeping keeps that history fresh (Garmin sync, adherence
+reconcile, stale-workout cleanup) but never writes a plan itself.
 
 Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 [docs/architecture.md](docs/architecture.md). Milestone status:
@@ -32,11 +31,11 @@ src/jim/
   config.py          # PLAN §8 constants + guardrail bounds + env-backed secrets
   schemas.py         # typed tool contracts (PLAN §7)
   db.py              # Postgres + idempotent migrations + kv store (composite user_id, key)
-  migrations/        # additive, idempotent SQL (001-008); ships inside the package
+  migrations/        # additive, idempotent SQL (001-009); ships inside the package
   auth.py            # email+password signup/login, session cookies, _require_user
-  crypto.py          # AES-GCM encrypt/decrypt for Garmin/Notion creds at rest
+  crypto.py          # AES-GCM encrypt/decrypt for Garmin creds at rest
   static/            # committed PWA icons (no Pillow at runtime)
-  tools/             # garmin, notion (read-only), history, research (gated), memory
+  tools/             # garmin, history, research (gated), memory
   agent/
     validate.py      # hard safety guardrail + advisory balance + fallback (used by coach.py)
   jobs/              # nightly.py (per-user sync + reconcile + cleanup, fanned out; no planning)

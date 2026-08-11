@@ -12,7 +12,6 @@ Two entrypoints, same work:
 - `python -m jim.jobs.nightly`, for running it by hand.
 """
 
-import json
 import logging
 import time
 from datetime import date, datetime
@@ -41,20 +40,6 @@ def store_exercise_sets(conn, user_id: int, activity_id: str, day, sets: list[di
         )
 
 
-def store_notion_log(conn, user_id: int, notion) -> None:
-    """Upsert one day of the knee/habit log. Shared with scripts/backfill.py."""
-    conn.execute(
-        "INSERT INTO notion_daily_log (user_id, day, pain_level, pain_location, pain_notes,"
-        " pt_done, habits, day_score) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-        " ON CONFLICT (user_id, day) DO UPDATE SET pain_level=EXCLUDED.pain_level,"
-        " pain_location=EXCLUDED.pain_location, pain_notes=EXCLUDED.pain_notes,"
-        " pt_done=EXCLUDED.pt_done, habits=EXCLUDED.habits,"
-        " day_score=EXCLUDED.day_score",
-        (user_id, notion.day, notion.pain_level, notion.pain_location, notion.pain_notes,
-         notion.pt_done, json.dumps(notion.habits), notion.day_score),
-    )
-
-
 def _today_for_user(user_id: int) -> date:
     """Resolve 'today' from the user's own timezone (users.timezone), falling
     back to the global app_timezone default only if it's somehow unset."""
@@ -69,19 +54,11 @@ def _today_for_user(user_id: int) -> date:
 
 
 def sync_today(user_id: int) -> None:
-    """Persist today's Garmin + Notion state so query_history has fresh rows."""
+    """Persist today's Garmin state so query_history has fresh rows."""
     from jim.tools.garmin import get_exercise_sets, get_garmin_today
-    from jim.tools.notion import get_notion_logs
 
     today = _today_for_user(user_id)
     garmin = get_garmin_today(user_id, today)
-    # Notion is optional per-user (not everyone shares a knee log) — unlike
-    # Garmin, a missing/broken connection here must not crash the whole run.
-    try:
-        notion = get_notion_logs(user_id, today)
-    except Exception:
-        log.warning("notion sync unavailable for user %s this run", user_id, exc_info=True)
-        notion = None
 
     with connect() as conn:
         conn.execute(
@@ -109,8 +86,6 @@ def sync_today(user_id: int) -> None:
                     )
                 except Exception:
                     log.exception("exercise sets fetch failed for %s", act.activity_id)
-        if notion is not None:
-            store_notion_log(conn, user_id, notion)
         conn.commit()
 
 
@@ -163,10 +138,9 @@ def _run_nightly_for_user(user_id: int) -> dict:
 def run_nightly() -> dict:
     """Fan out the nightly run over every nightly_enabled user.
 
-    One user's failure (expired Garmin creds, Notion down despite the guard in
-    sync_today, a Garmin API hiccup during cleanup/reconcile) is caught and
-    logged right here, at the per-user boundary — it must not stop the rest of
-    the cron run.
+    One user's failure (expired Garmin creds, a Garmin API hiccup during
+    cleanup/reconcile) is caught and logged right here, at the per-user
+    boundary — it must not stop the rest of the cron run.
     """
     started = time.monotonic()
     ensure_migrated()
