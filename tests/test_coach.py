@@ -1,7 +1,7 @@
 """Coach chat tests with fully injected deps — no LLM, Postgres, or APIs."""
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from jim.coach import (
     CoachDeps,
@@ -14,6 +14,7 @@ from jim.coach import (
     current_state,
     format_draft,
     format_duration,
+    plan_week,
     push_day,
 )
 from jim.playbook import Playbook, WorkoutTemplate
@@ -40,7 +41,9 @@ def day(iso: str, **overrides) -> dict:
 
 
 class Fakes:
-    def __init__(self, llm_outputs=None, lookups=None):
+    def __init__(self, llm_outputs=None, lookups=None, playbook=None, rotation_state=None):
+        self.playbook = playbook
+        self.rotation_state = rotation_state
         self.kv: dict = {}
         self.llm_outputs = llm_outputs or []
         self.llm_calls: list[list[dict]] = []
@@ -71,6 +74,11 @@ class Fakes:
             self.recorded.append((for_date, plan.title, source))
             return len(self.recorded)
 
+        extra = {}
+        if self.playbook is not None:
+            extra["playbook"] = self.playbook
+        if self.rotation_state is not None:
+            extra["rotation_state"] = self.rotation_state
         return CoachDeps(
             kv_get=self.kv.get,
             kv_set=self.kv.__setitem__,
@@ -84,6 +92,7 @@ class Fakes:
             record_suggestion=record,
             playbook_text=lambda: "PLAYBOOK-BLOCK",
             now=lambda: NOW,
+            **extra,
         )
 
 
@@ -137,6 +146,20 @@ def test_invalid_day_triggers_revision_then_drops_if_still_bad():
     assert "forbidden exercise" in out["reply"]
 
 
+def test_a_day_with_explicit_null_sets_is_not_silently_dropped():
+    """Caught testing live: the model sent "sets": null on a duration-only
+    step, and the whole day used to vanish from the plan with nothing but a
+    log line — the athlete would just see a shorter week, unexplained."""
+    d = day("2026-07-09", steps=[
+        {"exercise": "Plank", "sets": None, "reps": None,
+         "duration_sec": 40, "weight_kg": None, "notes": ""},
+    ])
+    f = Fakes([{"reply": "ok", "draft": [d], "goals": None}])
+    out = converse("plan tomorrow", 1, f.deps())
+    assert len(out["draft"]) == 1
+    assert out["draft"][0]["steps"][0]["sets"] == 1
+
+
 def test_draft_capped_at_seven_days():
     # Short days, so the weekly volume budget isn't the binding constraint here
     # — this is isolating the DRAFT_MAX_DAYS truncation.
@@ -168,6 +191,22 @@ def test_null_draft_keeps_current_one():
     f.kv["draft"] = [day("2026-07-09")]
     out = converse("thanks", 1, f.deps())
     assert len(out["draft"]) == 1
+
+
+def test_push_refuses_a_fabricated_template_pick_rather_than_build_garbage():
+    """Caught testing live: a model returned a template pick (empty steps) for
+    a key/ID that doesn't exist in the playbook at all. Building from empty
+    steps would create a junk Garmin workout; scheduling the unverified ID
+    risks landing on some unrelated real one. Refuse — touch nothing."""
+    f = Fakes()
+    f.kv["draft"] = [
+        day("2026-07-09", garmin_workout_id="9999999999", template_key="upper_x",
+            title="Upper X", steps=[]),
+    ]
+    summary = approve(1, f.deps())
+    assert f.scheduled == [] and f.created == [] and f.recorded == []
+    assert "couldn't push" in summary and "Upper X" in summary
+    assert "2026-07-09" not in f.kv.get("pushed", {})
 
 
 def test_approve_schedules_by_id_and_creates_custom_days():
@@ -388,8 +427,8 @@ def test_model_can_call_promote_workout_to_playbook():
     in test_multi_user_isolation.py."""
     calls = []
 
-    def fake_promote(for_date, key, target="workouts", add_to_rotation=False):
-        calls.append((for_date, key, target, add_to_rotation))
+    def fake_promote(for_date, key, add_to_rotation=False):
+        calls.append((for_date, key, add_to_rotation))
         return f"Saved {for_date}'s adaptation as the new '{key}' template (Full Body A)."
 
     f = Fakes(
@@ -403,10 +442,86 @@ def test_model_can_call_promote_workout_to_playbook():
         lookups={"promote_workout_to_playbook": fake_promote},
     )
     out = converse("make yesterday's session my new Full Body A", 1, f.deps())
-    assert calls == [("2026-07-09", "full_body_a", "workouts", False)]
+    assert calls == [("2026-07-09", "full_body_a", False)]
     assert "new Full Body A" in out["reply"]
     tool_msgs = [m for m in f.llm_calls[1] if m.get("role") == "tool"]
     assert "Saved 2026-07-09" in tool_msgs[0]["content"]
+
+
+def test_model_can_call_save_playbook_workout():
+    """The model-callable side of a permanent template edit (coach.py's tool
+    wiring) — the actual persistence is playbook.save_workout_template,
+    tested separately in test_playbook.py."""
+    calls = []
+
+    def fake_save(key, label=None, sport=None, warmup=None, blocks=None, equipment=None):
+        calls.append((key, label, sport, warmup, blocks, equipment))
+        return f"Updated playbook workout '{key}' (Full Body A)."
+
+    f = Fakes(
+        llm_outputs=[
+            {"content": None, "tool_calls": [
+                {"id": "c1", "name": "save_playbook_workout",
+                 "arguments": json.dumps({
+                     "key": "full_body_a",
+                     "blocks": [{"sets": 3, "exercises": [{"name": "Goblet squat", "reps": 12}]}],
+                 })},
+            ]},
+            {"reply": "Updated your Full Body A.", "draft": None, "goals": None},
+        ],
+        lookups={"save_playbook_workout": fake_save},
+    )
+    out = converse("swap in goblet squats on Full Body A for good", 1, f.deps())
+    assert calls == [(
+        "full_body_a", None, None,
+        None, [{"sets": 3, "exercises": [{"name": "Goblet squat", "reps": 12}]}], None,
+    )]
+    assert "Updated your Full Body A" in out["reply"]
+    tool_msgs = [m for m in f.llm_calls[1] if m.get("role") == "tool"]
+    assert "Updated playbook workout" in tool_msgs[0]["content"]
+
+
+def test_a_whole_new_rotation_can_be_authored_in_one_turn():
+    """'Switch me to a 4-day upper/lower split' — several workouts created and
+    the rotation replaced, all in a single turn. The dispatch loop runs every
+    tool call in a response, which is what makes this one conversation rather
+    than five."""
+    saved, rotations = [], []
+
+    def fake_save(key, label=None, sport=None, warmup=None, blocks=None, equipment=None):
+        saved.append(key)
+        return f"Created playbook workout '{key}' ({label})."
+
+    def fake_rotation(keys):
+        rotations.append(keys)
+        return "Rotation is now: " + " → ".join(keys)
+
+    keys = ["upper_a", "lower_a", "upper_b", "lower_b"]
+    f = Fakes(
+        llm_outputs=[
+            {"content": None, "tool_calls": [
+                {"id": f"c{i}", "name": "save_playbook_workout",
+                 "arguments": json.dumps(
+                     {"key": k, "label": k.replace("_", " ").title(),
+                      "sport": "strength_training"})}
+                for i, k in enumerate(keys)
+            ] + [
+                {"id": "c9", "name": "set_playbook_rotation",
+                 "arguments": json.dumps({"keys": keys})},
+            ]},
+            {"reply": "Done — you're on a 4-day upper/lower split now.",
+             "draft": None, "goals": None},
+        ],
+        lookups={"save_playbook_workout": fake_save,
+                 "set_playbook_rotation": fake_rotation},
+    )
+    out = converse("switch me to a 4-day upper/lower split", 1, f.deps())
+
+    assert saved == keys
+    assert rotations == [keys]
+    assert "upper/lower" in out["reply"]
+    tool_msgs = [m for m in f.llm_calls[1] if m.get("role") == "tool"]
+    assert len(tool_msgs) == 5  # every call answered, none dropped
 
 
 def test_tool_budget_forces_final_answer():
@@ -663,3 +778,162 @@ def test_cached_state_reuses_calendar_within_the_ttl(monkeypatch):
     _cached_state(deps)
     _cached_state(deps)
     assert len(calls) == 1
+
+
+# --- rotation facts in the prompt -------------------------------------------
+
+
+def _rot_pb(rotation=("full_body_a", "full_body_b", "full_body_c")):
+    return lambda: Playbook(
+        rotation=list(rotation),
+        workouts={
+            k: WorkoutTemplate(key=k, label=k, sport="strength_training")
+            for k in rotation
+        },
+    )
+
+
+def _system_text(f: Fakes) -> str:
+    return f.llm_calls[0][0]["content"]
+
+
+def test_rotation_block_gives_the_continuing_order_from_the_last_workout():
+    f = Fakes(
+        [{"reply": "ok", "draft": None, "goals": None}],
+        playbook=_rot_pb(),
+        rotation_state=lambda: ("full_body_b", "2026-07-06"),
+    )
+    converse("plan my week", 1, f.deps())
+    system = _system_text(f)
+
+    assert "# ROTATION" in system
+    assert "Last rotation workout: full_body_b, pushed 2026-07-06 (2 days ago)" in system
+    # the whole order, so a week sequences correctly in one turn
+    assert "Continue in this order: full_body_c → full_body_a → full_body_b" in system
+
+
+def test_rotation_block_starts_at_the_top_with_no_history():
+    f = Fakes([{"reply": "ok", "draft": None, "goals": None}], playbook=_rot_pb())
+    converse("plan my week", 1, f.deps())
+    system = _system_text(f)
+
+    assert "No rotation workout on record yet" in system
+    assert "Continue in this order: full_body_a → full_body_b → full_body_c" in system
+
+
+def test_no_rotation_block_when_there_is_no_rotation():
+    """A fresh signup has an empty rotation — the prompt shouldn't carry a
+    hollow section telling the model to follow nothing."""
+    f = Fakes([{"reply": "ok", "draft": None, "goals": None}], playbook=lambda: Playbook())
+    converse("hi", 1, f.deps())
+    assert "# ROTATION" not in _system_text(f)
+
+
+# --- plan_week --------------------------------------------------------------
+
+
+def _week(*isos):
+    return [day(i, title=f"S {i}") for i in isos]
+
+
+def test_plan_week_fills_the_week_and_echoes_its_prompt():
+    days = [(TODAY + timedelta(days=i)).isoformat() for i in range(7)]
+    f = Fakes([{"reply": "Here's your week.", "draft": _week(*days), "goals": None}])
+
+    out = plan_week(1, f.deps())
+
+    assert [d["for_date"] for d in out["draft"]] == days
+    assert days[0] in out["prompt"] and days[-1] in out["prompt"]
+    # it funnels through converse, so the instruction lands in chat history
+    assert f.kv["chat_history"][0]["role"] == "user"
+
+
+def test_plan_week_will_not_move_a_day_already_on_the_watch():
+    """The load-bearing guarantee: the model is TOLD to leave pushed days alone,
+    but the protection is code, so it holds even when the model ignores it."""
+    d0, d1 = TODAY.isoformat(), (TODAY + timedelta(days=1)).isoformat()
+    f = Fakes([{"reply": "replanned", "goals": None,
+                "draft": [day(d0, title="MODEL OVERWROTE IT"), day(d1, title="New Tuesday")]}])
+    f.kv["draft"] = _week(d0, d1)
+    f.kv["draft"][0]["title"] = "On the watch"
+    f.kv["pushed"] = {d0: {"title": "On the watch", "sig": "x", "pushed_at": 1}}
+
+    out = plan_week(1, f.deps())
+
+    by_date = {d["for_date"]: d for d in out["draft"]}
+    assert by_date[d0]["title"] == "On the watch"   # untouched
+    assert by_date[d1]["title"] == "New Tuesday"    # replanned
+    assert d0 in out["prompt"] and "already" in out["prompt"]
+
+
+def test_plan_week_ignores_stale_pushed_entries_outside_the_window():
+    """Found testing against a real account: `pushed` had a month-old date
+    that never got pruned from the draft, and it leaked into the prompt as
+    "already on your watch, leave alone" for a day nowhere near this week."""
+    stale = (TODAY - timedelta(days=30)).isoformat()
+    d0 = TODAY.isoformat()
+    f = Fakes([{"reply": "planned", "goals": None, "draft": _week(d0)}])
+    f.kv["draft"] = [day(stale, title="Ancient")]
+    f.kv["pushed"] = {stale: {"title": "Ancient", "sig": "x", "pushed_at": 1}}
+
+    out = plan_week(1, f.deps())
+
+    assert stale not in out["prompt"]
+    assert "already" not in out["prompt"]
+    assert out["draft"][0]["for_date"] == d0
+
+
+def test_typed_replan_is_allowed_to_rewrite_a_pushed_day():
+    """The deliberate asymmetry: the button is the safe bulk action, but asking
+    in words is the athlete overriding on purpose. Nothing reaches Garmin
+    either way until they press push."""
+    d0 = TODAY.isoformat()
+    f = Fakes([{"reply": "sure", "draft": [day(d0, title="Rewritten")], "goals": None}])
+    f.kv["draft"] = _week(d0)
+    f.kv["pushed"] = {d0: {"title": "On the watch", "sig": "x", "pushed_at": 1}}
+
+    out = converse("re-plan today, make it easier", 1, f.deps())
+
+    assert out["draft"][0]["title"] == "Rewritten"
+
+
+# --- draft window -----------------------------------------------------------
+
+
+def test_merge_drops_stale_past_days_instead_of_future_ones():
+    """The cap keeps the earliest dates, so yesterday's leftovers used to evict
+    a real future day from the week."""
+    yesterday = (TODAY - timedelta(days=1)).isoformat()
+    future = [(TODAY + timedelta(days=i)).isoformat() for i in range(7)]
+    f = Fakes([{"reply": "ok", "draft": _week(*future), "goals": None}])
+    f.kv["draft"] = _week(yesterday)
+
+    out = converse("plan my week", 1, f.deps())
+
+    dates = [d["for_date"] for d in out["draft"]]
+    assert yesterday not in dates
+    assert dates == future  # all seven future days survive the cap
+
+
+# --- edit scope -------------------------------------------------------------
+
+
+def test_scope_date_restricts_the_turn_to_one_day():
+    d1 = (TODAY + timedelta(days=1)).isoformat()
+    f = Fakes([{"reply": "ok", "draft": None, "goals": None}])
+    converse("make it easier", 1, f.deps(), scope_date=d1)
+    system = _system_text(f)
+    assert "# EDIT SCOPE" in system and d1 in system
+
+
+def test_week_scope_leaves_the_model_free_to_change_several_days():
+    d1, d2 = [(TODAY + timedelta(days=i)).isoformat() for i in (1, 2)]
+    f = Fakes([{"reply": "both eased", "goals": None,
+                "draft": [day(d1, title="Easy A"), day(d2, title="Easy B")]}])
+    f.kv["draft"] = _week(d1, d2)
+
+    out = converse("make Wednesday and Friday easier", 1, f.deps())
+
+    assert "# EDIT SCOPE" not in _system_text(f)
+    titles = {d["for_date"]: d["title"] for d in out["draft"]}
+    assert titles == {d1: "Easy A", d2: "Easy B"}

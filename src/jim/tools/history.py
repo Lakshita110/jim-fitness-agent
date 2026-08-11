@@ -367,3 +367,36 @@ def workout_history(user_id: int, days: int = 14) -> str:
             for o in outcomes
         ]
     return "\n".join(lines)
+
+
+def last_rotation_key(
+    user_id: int, rotation: list[str], as_of: date, days: int = 30
+) -> tuple[str | None, date | None]:
+    """The most recent rotation template actually pushed, and when.
+
+    This is what makes the playbook's `rotation` load-bearing: without it the
+    model has to infer "which letter comes next" from workout titles in
+    workout_history, which it may not even call. `template_key` is already
+    persisted inside suggestions.plan by tools/memory.record_suggestion on
+    every push — this just surfaces it.
+
+    Keys no longer in `rotation` are skipped, so a template the athlete has
+    since dropped can't pin the sequence. Returns (None, None) with no
+    history, which the caller reads as "start at the top"."""
+    if not rotation:
+        return (None, None)
+    from jim.db import connect
+
+    since = as_of - timedelta(days=days)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT for_date, plan->>'template_key' AS template_key"
+            " FROM suggestions WHERE user_id = %s AND for_date BETWEEN %s AND %s"
+            " AND plan->>'template_key' IS NOT NULL"
+            " ORDER BY for_date DESC",
+            (user_id, since, as_of),
+        ).fetchall()
+    for row in rows:
+        if row["template_key"] in rotation:
+            return (row["template_key"], row["for_date"])
+    return (None, None)

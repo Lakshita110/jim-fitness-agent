@@ -7,7 +7,7 @@ be recomputed without re-fetching."""
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SessionKind = Literal["strength", "conditioning", "mobility", "rest"]
 
@@ -72,6 +72,18 @@ class ExerciseStep(BaseModel):
     weight_kg: float | None = None
     notes: str = ""
 
+    # The model routinely sends explicit `null` for `sets` on a duration-only
+    # step (e.g. a plank) instead of omitting the key — a bare `int` field
+    # rejects that outright, and _parse_draft drops the WHOLE day on any one
+    # step's validation error. Caught testing against a real account: several
+    # otherwise-fine days vanished from the plan with only a log line to show
+    # for it. Coerce to the default rather than let one field's null nuke a
+    # session the model got everything else right on.
+    @field_validator("sets", mode="before")
+    @classmethod
+    def _sets_default_on_null(cls, v: int | None) -> int:
+        return 1 if v is None else v
+
 
 class StructuredSession(BaseModel):
     """The one truly generative output: tomorrow's session as Garmin-ready JSON."""
@@ -82,6 +94,15 @@ class StructuredSession(BaseModel):
     steps: list[ExerciseStep] = []
     est_duration_min: float = Field(default=0.0, ge=0)
     rationale_summary: str = ""
+
+    # Same failure mode as ExerciseStep.sets — a rest day with nothing to
+    # estimate sometimes comes back with `"est_duration_min": null` rather
+    # than 0, which would otherwise drop the whole day.
+    @field_validator("est_duration_min", mode="before")
+    @classmethod
+    def _duration_default_on_null(cls, v: float | None) -> float:
+        return 0.0 if v is None else v
+
     # When the agent selects a base template unchanged, it returns that
     # template's Garmin workout ID so the loop schedules the existing workout
     # (preserving loaded weights) instead of rebuilding it from `steps`.

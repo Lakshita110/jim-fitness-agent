@@ -143,6 +143,27 @@ def test_chat_push_day(monkeypatch):
     assert r.json()["push_status"] == {"2026-07-14": "pushed"}
 
 
+def test_chat_plan_week(monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", fake_settings)
+    monkeypatch.setattr(
+        coach, "plan_week",
+        lambda user_id: {
+            "reply": "Here's your week.", "prompt": "Plan my training for…",
+            "draft": [], "push_status": {}, "today": "2026-07-14",
+        },
+    )
+    assert client.post("/chat/plan-week", json={}).status_code == 403  # no cookie
+
+    _sign_in(monkeypatch)
+    r = client.post("/chat/plan-week", json={})
+    assert r.status_code == 200
+    body = r.json()
+    # the UI renders `prompt` as the athlete's message and `reply` as Jim's
+    assert body["prompt"] == "Plan my training for…"
+    assert body["reply"] == "Here's your week."
+    assert body["draft"] == [] and body["push_status"] == {}
+
+
 def test_cron_nightly_requires_vercel_bearer(monkeypatch):
     """Vercel Cron authenticates with `Authorization: Bearer $CRON_SECRET`. An
     unauthenticated endpoint would let anyone burn LLM spend and rewrite the plan."""

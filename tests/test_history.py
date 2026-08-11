@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import date, timedelta
 
 from jim.tools.history import (
@@ -6,6 +7,7 @@ from jim.tools.history import (
     compute_features,
     compute_readiness,
     days_since_legs,
+    last_rotation_key,
     muscle_group_balance,
     weekly_volume_min,
 )
@@ -192,3 +194,70 @@ def test_readiness_no_data_is_steady():
     assert r.acwr is None
     assert r.basis == "none"
     assert "not enough" in r.detail
+
+
+# --- last_rotation_key: what makes the playbook rotation load-bearing --------
+
+
+ROTATION = ["full_body_a", "full_body_b", "full_body_c"]
+
+
+def _fake_connect(rows, captured=None):
+    """Stand in for jim.db.connect for the one suggestions query under test.
+    Rows come back already date-desc, as the SQL orders them."""
+    class Cur:
+        def fetchall(self):
+            return rows
+
+    class Conn:
+        def execute(self, sql, params=None):
+            if captured is not None:
+                captured.append((sql, params))
+            return Cur()
+
+    @contextmanager
+    def connect():
+        yield Conn()
+
+    return connect
+
+
+def test_last_rotation_key_returns_the_most_recent_pushed_template(monkeypatch):
+    rows = [
+        {"for_date": date(2026, 7, 5), "template_key": "full_body_b"},
+        {"for_date": date(2026, 7, 2), "template_key": "full_body_a"},
+    ]
+    monkeypatch.setattr("jim.db.connect", _fake_connect(rows))
+    assert last_rotation_key(1, ROTATION, AS_OF) == ("full_body_b", date(2026, 7, 5))
+
+
+def test_last_rotation_key_skips_templates_dropped_from_the_rotation(monkeypatch):
+    """A template the athlete has since removed must not pin the sequence."""
+    rows = [
+        {"for_date": date(2026, 7, 5), "template_key": "retired_day"},
+        {"for_date": date(2026, 7, 2), "template_key": "full_body_a"},
+    ]
+    monkeypatch.setattr("jim.db.connect", _fake_connect(rows))
+    assert last_rotation_key(1, ROTATION, AS_OF) == ("full_body_a", date(2026, 7, 2))
+
+
+def test_last_rotation_key_with_no_history_starts_at_the_top(monkeypatch):
+    monkeypatch.setattr("jim.db.connect", _fake_connect([]))
+    assert last_rotation_key(1, ROTATION, AS_OF) == (None, None)
+
+
+def test_last_rotation_key_is_scoped_to_the_user_and_window(monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("jim.db.connect", _fake_connect([], captured))
+    last_rotation_key(7, ROTATION, AS_OF, days=30)
+    sql, params = captured[0]
+    assert "user_id = %s" in sql
+    assert params == (7, AS_OF - timedelta(days=30), AS_OF)
+
+
+def test_empty_rotation_never_touches_the_db(monkeypatch):
+    def boom():
+        raise AssertionError("should not query with no rotation to follow")
+
+    monkeypatch.setattr("jim.db.connect", boom)
+    assert last_rotation_key(1, [], AS_OF) == (None, None)

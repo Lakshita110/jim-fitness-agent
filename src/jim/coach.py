@@ -5,11 +5,16 @@ push to Garmin only on explicit approve.
 The model can call TOOLS mid-turn (bounded to MAX_TOOL_ROUNDS): read-only
 lookups — per-exercise performance history from the watch (checked before
 prescribing weights), recent workout/adherence history, and research (curated
-corpus + web) — plus one mutating action, promote_workout_to_playbook, which
-saves an already-pushed adaptation as a new permanent playbook default when
-the athlete explicitly asks for it (see playbook.promote_garmin_workout). The
-tool round-trip itself isn't persisted to chat history — the model's own reply
-is the durable record of what it did, so it must say so in plain language.
+corpus + web) — plus two mutating actions, both explicit-request-only:
+promote_workout_to_playbook, which saves an already-pushed adaptation as a
+new permanent playbook default (see playbook.promote_garmin_workout), and
+update_playbook_workout, which edits an existing template in place (see
+playbook.update_workout_template). A one-time workout or one-time tweak to a
+single day never calls either — it's just an adapted draft session, built as
+a disposable one-off Garmin workout that's cleaned up automatically once its
+date passes (see jobs.nightly.cleanup_stale_adaptations). The tool
+round-trip itself isn't persisted to chat history — the model's own reply is
+the durable record of what it did, so it must say so in plain language.
 
 State is deliberately simple — everything lives in the kv store:
 - 'chat_history': last HISTORY_LIMIT messages [{role, content}]
@@ -106,12 +111,103 @@ TOOL_SCHEMAS = [
                                  "description": "YYYY-MM-DD of the pushed adaptation"},
                     "key": {"type": "string",
                             "description": "playbook key, e.g. 'full_body_a'"},
-                    "target": {"type": "string", "enum": ["workouts", "pt_routines"],
-                               "description": "base rotation or PT routine; default workouts"},
                     "add_to_rotation": {"type": "boolean",
                                         "description": "also add this key to the A/B/C rotation"},
                 },
                 "required": ["for_date", "key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_playbook_workout",
+            "description": "Create a new permanent playbook workout, or edit an existing"
+            " one in place (e.g. 'swap goblet squats into Full Body A for good', or"
+            " 'add an upper-body day'). Call once per workout — several calls in one"
+            " turn is how you build a whole new program. Only call this when the athlete"
+            " EXPLICITLY asks to change their standing templates, never on your own"
+            " initiative. When editing, include only the fields being changed; omitted"
+            " fields are left as-is. Creating requires label and sport. Changing warmup"
+            " or blocks clears the stored Garmin workout ID, so it's rebuilt fresh from"
+            " the new steps next time it's scheduled.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string",
+                            "description": "playbook key, e.g. 'upper_a' — snake_case,"
+                            " stable, used to reference this workout in the rotation"},
+                    "label": {"type": "string",
+                              "description": "human name, e.g. 'Upper A'; required when"
+                              " creating"},
+                    "sport": {"type": "string",
+                              "enum": ["strength_training", "mobility", "cardio"],
+                              "description": "required when creating"},
+                    "warmup": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "reps": {"type": "integer"},
+                                "time_sec": {"type": "integer"},
+                            },
+                            "required": ["name"],
+                        },
+                    },
+                    "blocks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "group": {"type": "string"},
+                                "sets": {"type": "integer",
+                                         "description": "rounds for the whole block"},
+                                "exercises": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "sets": {"type": "integer"},
+                                            "reps": {"type": "integer"},
+                                            "time_sec": {"type": "integer"},
+                                        },
+                                        "required": ["name"],
+                                    },
+                                },
+                            },
+                            "required": ["exercises"],
+                        },
+                    },
+                    "equipment": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_playbook_rotation",
+            "description": "Replace the rotation — the ordered list of workouts cycled"
+            " through on training days (e.g. 'switch me to a 4-day upper/lower split')."
+            " Pass the FULL new order, not just additions; it replaces what's there."
+            " Every key must already exist in the playbook, so call"
+            " save_playbook_workout first for any workout you're inventing. Only call"
+            " this when the athlete EXPLICITLY asks to change their program structure,"
+            " never on your own initiative.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "playbook keys in the order they should cycle;"
+                        " [] clears the rotation",
+                    },
+                },
+                "required": ["keys"],
             },
         },
     },
@@ -147,6 +243,11 @@ A day is EITHER a template pick OR an adaptation — never both:
   garmin_workout_id AND template_key to null and list the FULL steps. Never
   return a template's garmin_workout_id next to steps you changed — the steps
   are what the athlete sees, so the steps are what gets built on the watch.
+- Only ever use a garmin_workout_id/template_key that appears in the PLAYBOOK
+  block below — never invent one, even a plausible-looking one, and never
+  reuse an ID from an earlier turn once it's not listed there. If there's no
+  matching template for what you want to schedule, write it as an adaptation
+  with full steps instead.
 
 LONG-TERM GOALS: the athlete's goals are a plain-text block you maintain. When they
 state, change, or complete a goal, return the FULL rewritten goals block in "goals"
@@ -168,14 +269,33 @@ any weight or rep target and progress conservatively from what was actually done
 one). Call workout_history for what recently happened; call research for
 pain-driven substitutions and cite the sources in your reply.
 
-PROMOTING AN ADAPTATION: an adapted day you push builds a one-off Garmin
-workout — it's disposable, not a default, until made one. If (and ONLY if)
-the athlete explicitly asks to keep an already-pushed adaptation as their new
-default (e.g. "make this my new Full Body A", "let's lock this in"), call
-promote_workout_to_playbook with that day's date and a playbook key. Never
-call it on your own initiative, never for a day that hasn't been pushed yet,
-and always confirm in your reply exactly what you changed — that reply is the
-only durable record of the action.
+ONE-OFF SESSIONS: a new one-time workout, or a one-time change to an existing
+day ("just today, swap in X" / "give me a random conditioning session for
+tomorrow"), is just an adapted draft day — full steps, no garmin_workout_id.
+Pushing it builds a disposable one-off Garmin workout and never touches the
+playbook; it's cleaned up automatically once its date passes. Don't call any
+playbook tool for these — only do that on an explicit, standing request.
+
+PROMOTING AN ADAPTATION: if (and ONLY if) the athlete explicitly asks to keep
+an already-pushed adaptation as their new default (e.g. "make this my new
+Full Body A", "let's lock this in"), call promote_workout_to_playbook with
+that day's date and a playbook key. Never call it on your own initiative,
+never for a day that hasn't been pushed yet.
+
+CHANGING THE PLAYBOOK ITSELF: only ever on an explicit, standing request —
+never on your own initiative. To permanently change a template ("update my
+Full Body A to use goblet squats from now on"), call save_playbook_workout
+with that key and only the fields being changed. To invent one, call it with
+a new key plus label and sport. To restructure the program ("switch me to a
+4-day upper/lower split"), save each workout first, then call
+set_playbook_rotation with the FULL new order — you may make all of those
+calls in one turn. Always confirm in your reply exactly what you changed —
+that reply is the only durable record of the action.
+
+ROTATION: the ROTATION block below tells you which template was last done and
+the order to continue in. Follow that order for training days unless
+readiness, pain, or an explicit request says otherwise — and say one plain
+line when you deviate.
 
 Today is {today}. Respond ONLY with a JSON object:
 {{"reply": str,                      # chat message; light markdown ok (**bold**, "- " bullets,
@@ -214,6 +334,10 @@ class CoachDeps:
     # construct CoachDeps directly without injecting `playbook` keep working
     # with zero args — .live() always overrides this with the real per-user one.
     playbook: Callable[[], Playbook] = _load_playbook_from_disk
+    # (last rotation template_key, ISO date it was pushed) — what the prompt's
+    # ROTATION block is built from. Defaults to "no history", i.e. start at the
+    # top of the rotation, so directly-constructed test deps keep working.
+    rotation_state: Callable[[], tuple[str | None, str | None]] = lambda: (None, None)
 
     @classmethod
     def live(cls, user_id: int) -> "CoachDeps":
@@ -225,6 +349,7 @@ class CoachDeps:
         from jim.tools import garmin, memory
         from jim.tools.history import (
             exercise_history,
+            last_rotation_key,
             query_history,
             readiness_read,
             workout_history,
@@ -296,8 +421,7 @@ class CoachDeps:
             return "\n".join(f"[{h.source}] {h.title}: {h.snippet}" for h in hits) or "(no hits)"
 
         def promote_workout_to_playbook(
-            for_date: str, key: str, target: str = "workouts",
-            add_to_rotation: bool = False,
+            for_date: str, key: str, add_to_rotation: bool = False,
         ) -> str:
             from jim.playbook import promote_garmin_workout
 
@@ -309,10 +433,46 @@ class CoachDeps:
                     " been pushed to Garmin yet, or it was already promoted."
                 )
             template = promote_garmin_workout(
-                user_id, entry["workout_id"], key, target,
+                user_id, entry["workout_id"], key,
                 add_to_rotation=add_to_rotation,
             )
             return f"Saved {for_date}'s adaptation as the new '{key}' template ({template.label})."
+
+        def save_playbook_workout(
+            key: str, label: str | None = None, sport: str | None = None,
+            warmup: list[dict] | None = None, blocks: list[dict] | None = None,
+            equipment: list[str] | None = None,
+        ) -> str:
+            from jim.playbook import Block, Exercise, save_workout_template
+
+            existed = key in load_playbook(user_id).workouts
+            try:
+                template = save_workout_template(
+                    user_id, key,
+                    label=label, sport=sport,
+                    warmup=[Exercise(**e) for e in warmup] if warmup is not None else None,
+                    blocks=[Block(**b) for b in blocks] if blocks is not None else None,
+                    equipment=equipment,
+                )
+            except RuntimeError as e:
+                return str(e)
+            verb = "Updated" if existed else "Created"
+            return f"{verb} playbook workout '{key}' ({template.label})."
+
+        def set_playbook_rotation(keys: list[str]) -> str:
+            from jim.playbook import set_rotation
+
+            try:
+                rotation = set_rotation(user_id, keys)
+            except RuntimeError as e:
+                return str(e)
+            return "Rotation is now: " + (" → ".join(rotation) or "(empty)")
+
+        def rotation_state() -> tuple[str | None, str | None]:
+            last_key, on = last_rotation_key(
+                user_id, load_playbook(user_id).rotation, now().date()
+            )
+            return (last_key, on.isoformat() if on else None)
 
         return cls(
             kv_get=lambda key: kv_get(user_id, key),
@@ -324,6 +484,8 @@ class CoachDeps:
                 "workout_history": lambda days=14: workout_history(user_id, days),
                 "research": research,
                 "promote_workout_to_playbook": promote_workout_to_playbook,
+                "save_playbook_workout": save_playbook_workout,
+                "set_playbook_rotation": set_playbook_rotation,
             },
             schedule_workout=lambda wid, on: garmin.schedule_workout(user_id, wid, on),
             clear_schedule=lambda on: garmin.clear_schedule(user_id, on),
@@ -333,6 +495,7 @@ class CoachDeps:
             playbook_text=lambda: load_playbook(user_id).to_prompt(),
             playbook=lambda: load_playbook(user_id),
             now=now,
+            rotation_state=rotation_state,
         )
 
 
@@ -505,8 +668,12 @@ def adaptation_title(template_label: str | None, for_date: date, fallback: str) 
     return f"{base} — adapted {for_date.isoformat()}"
 
 
-def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
-    """Schedule a single session on the watch and record it. Returns a summary line.
+def _push_one(deps: CoachDeps, session: StructuredSession) -> tuple[bool, str]:
+    """Schedule a single session on the watch and record it. Returns
+    (pushed, summary line) — callers must only mark the day as on-watch when
+    `pushed` is true. Without that check a refused push (see below) still got
+    recorded as successful, so the UI showed a day as on-watch that Garmin had
+    never actually received.
 
     An untouched template is scheduled by ID (its loaded weights live on Garmin,
     not here); anything the athlete adapted is built fresh from its steps. The
@@ -527,6 +694,15 @@ def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
         and session.garmin_workout_id  # short-circuits: no template ID, no playbook read
         and use_existing_workout(session, deps.playbook())
     )
+    if session.kind != "rest" and not as_template and not session.steps:
+        # A template pick (empty steps) whose ID/key doesn't resolve against
+        # THIS playbook — the model invented a template that isn't there.
+        # Building from empty steps would create a garbage Garmin workout;
+        # scheduling the unverified ID risks landing on an unrelated real one.
+        # Refuse rather than touch Garmin at all.
+        return (False,
+                f"{fd}: couldn't push — {session.title!r} doesn't match any"
+                " playbook workout and has no steps to build from")
     if session.kind == "rest":
         pass  # rest schedules nothing on the watch
     elif as_template:
@@ -559,9 +735,9 @@ def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
         fd, session, session.rationale_summary, False, "fast", source="chat",
     )
     if session.kind == "rest":
-        return f"{fd}: rest day (nothing scheduled)"
+        return (True, f"{fd}: rest day (nothing scheduled)")
     verb = "scheduled" if as_template else "created + scheduled"
-    return f"{fd}: {verb} {session.title}"
+    return (True, f"{fd}: {verb} {session.title}")
 
 
 def _mark_pushed(deps: CoachDeps, session: StructuredSession) -> None:
@@ -611,9 +787,37 @@ def _system_prompt(deps: CoachDeps, state: dict) -> str:
         "# TODAY'S STATE\n" + json.dumps(state),
         "# LONG-TERM GOALS\n" + goals,
         "# CURRENT DRAFT\n" + (json.dumps(draft) if draft else "(empty)"),
-        "# PLAYBOOK\n" + deps.playbook_text(),
     ]
+    rotation_block = _rotation_block(deps, today)
+    if rotation_block:
+        parts.append(rotation_block)
+    parts.append("# PLAYBOOK\n" + deps.playbook_text())
     return "\n\n".join(parts)
+
+
+def _rotation_block(deps: CoachDeps, today: date) -> str:
+    """Which template was last done and the order to continue in.
+
+    Without this the model has to guess the next letter from workout titles;
+    with it, a whole week sequences correctly in one turn — which is why the
+    full continuing order is spelled out, not just the next key. Empty string
+    when there's no rotation to follow (a fresh signup), so the prompt doesn't
+    carry a hollow section."""
+    rotation = deps.playbook().rotation
+    if not rotation:
+        return ""
+
+    last_key, last_on = deps.rotation_state()
+    order = deps.playbook().rotation_from(last_key)
+    lines = ["# ROTATION"]
+    if last_key and last_on:
+        ago = (today - date.fromisoformat(last_on)).days
+        when = "today" if ago == 0 else f"{ago} day{'s' if ago != 1 else ''} ago"
+        lines.append(f"Last rotation workout: {last_key}, pushed {last_on} ({when})")
+    else:
+        lines.append("No rotation workout on record yet — start at the top.")
+    lines.append("Continue in this order: " + " → ".join(order))
+    return "\n".join(lines)
 
 
 def _loads_json(text: str) -> dict:
@@ -628,7 +832,8 @@ def _loads_json(text: str) -> dict:
 def _run_model(deps: CoachDeps, system: str, history: list[dict]) -> dict:
     """One model turn, with a bounded tool loop: the model may call
     exercise_history / workout_history / research (read-only) or
-    promote_workout_to_playbook (mutating) before answering."""
+    promote_workout_to_playbook / save_playbook_workout /
+    set_playbook_rotation (mutating) before answering."""
     msgs = [{"role": "system", "content": system}, *history]
     for _ in range(MAX_TOOL_ROUNDS):
         resp = deps.llm(msgs, TOOL_SCHEMAS)
@@ -704,7 +909,12 @@ def converse(text: str, user_id: int, deps: CoachDeps | None = None,
                 by_date = {s.for_date.isoformat(): s for s in existing}
                 for s in new:
                     by_date[s.for_date.isoformat()] = s
-                return [by_date[k] for k in sorted(by_date)][:DRAFT_MAX_DAYS]
+                # Drop yesterday's leftovers BEFORE truncating. The cap keeps
+                # the earliest dates, so a stale past day would otherwise
+                # silently evict a real future one — and the UI's week always
+                # starts at today, so past days aren't even visible.
+                live = [k for k in sorted(by_date) if k >= today.isoformat()]
+                return [by_date[k] for k in live][:DRAFT_MAX_DAYS]
 
             # Validate the merged plan — that's what gets saved, and leg spacing
             # only means anything when the days are seen together.
@@ -739,6 +949,67 @@ def converse(text: str, user_id: int, deps: CoachDeps | None = None,
             "push_status": _push_status(deps, saved), "today": today.isoformat()}
 
 
+def plan_week(user_id: int, deps: CoachDeps | None = None,
+              days: int = DRAFT_MAX_DAYS) -> dict:
+    """Fill the next `days` of the draft in one turn, leaving days already on
+    the watch untouched.
+
+    Funnels through converse(), so there's still exactly one planning path —
+    this only supplies the instruction and re-asserts the protected days
+    afterwards. That re-assertion, not the prompt wording, is what actually
+    guarantees a pushed day survives: a model that ignores the instruction
+    still can't move it.
+
+    Note the deliberate asymmetry with typed chat, which stays unrestricted.
+    Asking for a re-plan in words is the athlete overriding on purpose; the
+    button is the safe bulk action.
+
+    Returns converse()'s shape plus `prompt` — the instruction used, so the UI
+    can show it as the athlete's message without duplicating the wording."""
+    deps = deps or CoachDeps.live(user_id)
+    today = deps.now().date()
+    dates = [(today + timedelta(days=i)).isoformat() for i in range(days)]
+    dates_set = set(dates)
+
+    # Restricted to THIS window: `pushed` can carry long-stale entries (a
+    # day pushed weeks ago that never got pruned from the draft) — without
+    # this filter those leak into the prompt as "already on your watch,
+    # leave alone" for dates nowhere near the week being planned.
+    protected = set(deps.kv_get("pushed") or {}) & dates_set
+    before = {
+        s.for_date.isoformat(): s
+        for s in _parse_draft(deps.kv_get("draft") or [], today)
+        if s.for_date.isoformat() in protected
+    }
+
+    locked = sorted(before)
+    open_dates = [d for d in dates if d not in before]
+    prompt = (
+        f"Plan my training for {dates[0]} through {dates[-1]}."
+        f" Fill every one of these dates: {', '.join(open_dates)}."
+        " Include rest days explicitly as kind \"rest\"."
+    )
+    if locked:
+        prompt += (
+            f" Leave {', '.join(locked)} exactly as they are — they're already"
+            " on my watch. Plan around them."
+        )
+
+    out = converse(prompt, user_id, deps)
+
+    if before:
+        plan = _parse_draft(out.get("draft") or [], today)
+        merged = {s.for_date.isoformat(): s for s in plan}
+        merged.update(before)  # the model doesn't get a vote on these
+        restored = [merged[k] for k in sorted(merged)][:DRAFT_MAX_DAYS]
+        deps.kv_set("draft", [s.model_dump(mode="json") for s in restored])
+        out["draft"] = deps.kv_get("draft") or []
+        out["push_status"] = _push_status(deps, restored)
+
+    out["prompt"] = prompt
+    return out
+
+
 def approve(user_id: int, deps: CoachDeps | None = None) -> str:
     """Push every day in the draft to Garmin and record suggestions. The draft
     is kept (each day now shows as on-watch) so it stays visible and editable;
@@ -753,8 +1024,10 @@ def approve(user_id: int, deps: CoachDeps | None = None) -> str:
         fd = session.for_date.isoformat()
         if fd in pushed_before and session.kind != "rest":
             deps.clear_schedule(session.for_date)  # replace, don't duplicate
-        lines.append(_push_one(deps, session))
-        _mark_pushed(deps, session)
+        ok, line = _push_one(deps, session)
+        lines.append(line)
+        if ok:
+            _mark_pushed(deps, session)
     summary = "Pushed to Garmin:\n" + "\n".join(lines)
     history = (deps.kv_get("chat_history") or [])[-HISTORY_LIMIT:]
     history.append({"role": "assistant", "content": summary})
@@ -792,10 +1065,13 @@ def push_day(for_date: str, user_id: int, deps: CoachDeps | None = None) -> dict
         _mark_pushed(deps, session)  # drops it from the pushed map
         summary = f"Cleared {for_date} — rest day, nothing left on the watch."
     else:
-        line = _push_one(deps, session)
-        _mark_pushed(deps, session)
-        verb = "Updated on Garmin" if updating else "Pushed to Garmin"
-        summary = f"{verb} — {line.split(': ', 1)[-1]}"
+        ok, line = _push_one(deps, session)
+        if ok:
+            _mark_pushed(deps, session)
+            verb = "Updated on Garmin" if updating else "Pushed to Garmin"
+            summary = f"{verb} — {line.split(': ', 1)[-1]}"
+        else:
+            summary = line
     return {"summary": summary, "draft": draft_json,
             "push_status": _push_status(deps, draft)}
 

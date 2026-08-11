@@ -33,6 +33,13 @@ def chat_message(msg: ChatMessage, request: Request) -> dict:
     return coach.converse(msg.text.strip(), user.id, scope_date=msg.scope_date)
 
 
+@router.post("/chat/plan-week")
+def chat_plan_week(body: KeyOnly, request: Request) -> dict:
+    user = deps._require_user(request)
+    deps._ready()
+    return coach.plan_week(user.id)
+
+
 @router.post("/chat/approve")
 def chat_approve(body: KeyOnly, request: Request) -> dict:
     user = deps._require_user(request)
