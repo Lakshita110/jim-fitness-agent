@@ -20,8 +20,7 @@ messages, and `state`, the hourly-cached day snapshot.)
 
 | File | What it is | Source of truth |
 |---|---|---|
-| `base_workouts.yaml` | The A/B/C strength rotation | the Garmin workouts (IDs referenced) |
-| `pt_routines.yaml` | PT for non-lifting days: `pt_home` + `pt_gym` | these files (both exist on Garmin) |
+| `base_workouts.yaml` | The full workout library — A/B/C strength rotation plus PT routines (`pt_home`/`pt_gym`, not in rotation) | the Garmin workouts (IDs referenced) |
 | `directives.md` | **Standing rules, in plain English** | you |
 
 The whole playbook is rendered into context on every chat turn. Directives sit

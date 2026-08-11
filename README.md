@@ -46,7 +46,7 @@ src/jim/
                       #   wires in web/
   web/               # route groups: auth, chat, playbook, garmin onboarding, deps, templates
 api/index.py         # Vercel entrypoint — re-exports app.app as the ASGI handler
-playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
+playbook/            # editable memory: base_workouts.yaml (workout library + rotation), directives.md
 data/corpus/         # curated research corpus (seeded by scripts/seed_corpus.py)
 docs/                # architecture, chat, memory, garmin_strength
 scripts/             # m1_roundtrip.py, backfill.py, backfill_users.py, garmin_login.py, seed_corpus.py

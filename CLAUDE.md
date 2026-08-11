@@ -17,7 +17,7 @@ one Postgres, one operator.
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, wires in `web/` routers | active |
 | `src/jim/web/{auth,chat,garmin,playbook}_routes.py`, `deps.py`, `templates.py` | HTTP routes + inline no-build-step HTML/CSS/JS pages | active |
-| `src/jim/coach.py` | Chat: conversation, lookups, draft merge, goals memory, push | active |
+| `src/jim/coach.py` | Chat: conversation, lookups, draft merge, goals memory, push, `plan_week()` | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
 | `src/jim/playbook.py` | Load/save the per-user playbook (Postgres JSONB); disk YAML is seed only | active |
 | `src/jim/config.py`, `db.py`, `auth.py`, `crypto.py` | Settings, Postgres/`kv`, auth, at-rest credential encryption | active |
@@ -29,9 +29,9 @@ one Postgres, one operator.
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | active |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | active |
-| `src/jim/migrations/001–009_*.sql` | Additive, idempotent, never edited after applied | active |
+| `src/jim/migrations/001–010_*.sql` | Additive, idempotent, never edited after applied | active |
 | `src/jim/data/garmin_exercises.json` | Vendored Garmin exercise taxonomy | active |
-| `playbook/{base_workouts.yaml,directives.md,pt_routines.yaml}` | The real athlete's committed content (real `garmin_workout_id`s, knee-specific PT) | active |
+| `playbook/{base_workouts.yaml,directives.md}` | The real athlete's committed content — one flat workout library (strength + PT) plus rotation order, real `garmin_workout_id`s | active |
 | `playbook/defaults/*` | Intentionally empty/generic seed for new signups | active |
 | `data/corpus/*` | Research corpus source + template | needs-review — not traced to `research.py` ingestion path this session |
 | `scripts/backfill_users.py` | One-off: creates the original athlete's user row, seeds their playbook, backfills `user_id` onto pre-multi-tenant rows. Not idempotent by design | active (one-off, already run) |
@@ -43,8 +43,10 @@ one Postgres, one operator.
 
 ## Architecture rules (from the code, not assumed)
 
-- **One planning path.** Only `coach.py` (chat) writes drafts; `jobs/nightly.py` only syncs/reconciles/cleans up.
+- **One planning path.** Only `coach.py` (chat) writes drafts; `jobs/nightly.py` only syncs/reconciles/cleans up. The "Plan my week" button is not a second path — `plan_week()` funnels through `converse()`, supplying an instruction and then re-asserting days already on the watch.
 - **Propose-only.** Nothing pushes to Garmin except an explicit `coach.approve()`/`push_day()` call from a user action.
+- **The rotation is followed, not guessed.** `tools/history.last_rotation_key()` reads the last pushed `template_key` out of `suggestions.plan`, and `Playbook.rotation_from()` turns it into the continuing order, which the prompt's `# ROTATION` block hands the model. The model still chooses; it just isn't inferring the sequence from workout titles.
+- **Playbook writes are explicit-request-only**, and there are exactly three: `promote_garmin_workout` (keep a pushed one-off), `save_workout_template` (upsert a template), `set_rotation` (replace the order). A one-off session or a single-day tweak writes none of them.
 - **Guardrail is the single safety authority.** `agent/validate.py` hard-rejects unsafe days; balance is advisory only. No component bypasses it.
 - **User isolation is structural, not conventional.** Every history table and `kv` row carries `user_id` in a composite key — see `tests/test_multi_user_isolation.py`.
 - **Side effects are injected**, not imported ad hoc — `CoachDeps` keeps tests offline.
