@@ -704,7 +704,25 @@ def _push_one(deps: CoachDeps, session: StructuredSession) -> tuple[bool, str]:
                 f"{fd}: couldn't push — {session.title!r} doesn't match any"
                 " playbook workout and has no steps to build from")
     if session.kind == "rest":
-        pass  # rest schedules nothing on the watch
+        # A rest day means nothing SHOULD be on the watch — but something may
+        # already be there from before this day became rest. Caught testing
+        # live: approve()'s pre-loop guard skipped clear_schedule specifically
+        # for rest days ("nothing to replace"), so turning an already-pushed
+        # day into rest via plan-my-week + approve left the stale real
+        # workout sitting on the watch while the summary claimed "nothing
+        # scheduled." clear_schedule reads Garmin's actual calendar for this
+        # date, so it's correct whether the prior day was a template pick or
+        # an adaptation.
+        deps.clear_schedule(fd)
+        created = deps.kv_get("jim_created_workouts") or {}
+        prior = created.pop(fd_iso, None)
+        if prior:
+            try:
+                deps.delete_garmin_workout(prior["workout_id"])
+            except Exception:
+                log.warning("couldn't delete prior adaptation %s for %s",
+                            prior["workout_id"], fd_iso, exc_info=True)
+            deps.kv_set("jim_created_workouts", created)
     elif as_template:
         deps.schedule_workout(session.garmin_workout_id, fd)
     else:
@@ -1022,8 +1040,11 @@ def approve(user_id: int, deps: CoachDeps | None = None) -> str:
     lines = []
     for session in draft:
         fd = session.for_date.isoformat()
-        if fd in pushed_before and session.kind != "rest":
-            deps.clear_schedule(session.for_date)  # replace, don't duplicate
+        if fd in pushed_before:
+            # Replace, don't duplicate — including when the day is now rest:
+            # _push_one's rest branch also clears the schedule, but this
+            # guard exists independently of that, not in place of it.
+            deps.clear_schedule(session.for_date)
         ok, line = _push_one(deps, session)
         lines.append(line)
         if ok:
@@ -1054,24 +1075,19 @@ def push_day(for_date: str, user_id: int, deps: CoachDeps | None = None) -> dict
                 "draft": draft_json, "push_status": _push_status(deps, draft)}
 
     updating = for_date in (deps.kv_get("pushed") or {})
-    if updating and session.kind != "rest":
-        deps.clear_schedule(target)  # replace, don't duplicate
-    if session.kind == "rest":
-        if updating:
-            deps.clear_schedule(target)
-        deps.record_suggestion(
-            target, session, session.rationale_summary, False, "fast", source="chat",
-        )
+    if updating:
+        deps.clear_schedule(target)  # replace, don't duplicate (rest included —
+        # _push_one's rest branch also clears, this guard is independent of it)
+    ok, line = _push_one(deps, session)
+    if not ok:
+        summary = line
+    elif session.kind == "rest":
         _mark_pushed(deps, session)  # drops it from the pushed map
         summary = f"Cleared {for_date} — rest day, nothing left on the watch."
     else:
-        ok, line = _push_one(deps, session)
-        if ok:
-            _mark_pushed(deps, session)
-            verb = "Updated on Garmin" if updating else "Pushed to Garmin"
-            summary = f"{verb} — {line.split(': ', 1)[-1]}"
-        else:
-            summary = line
+        _mark_pushed(deps, session)
+        verb = "Updated on Garmin" if updating else "Pushed to Garmin"
+        summary = f"{verb} — {line.split(': ', 1)[-1]}"
     return {"summary": summary, "draft": draft_json,
             "push_status": _push_status(deps, draft)}
 

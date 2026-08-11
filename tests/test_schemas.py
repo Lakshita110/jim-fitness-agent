@@ -30,3 +30,20 @@ def test_explicit_est_duration_min_is_unaffected():
     s = StructuredSession(for_date=date(2026, 8, 12), kind="strength", title="Lift",
                            est_duration_min=45.0)
     assert s.est_duration_min == 45.0
+
+
+def test_garmin_workout_id_sent_as_a_json_number_is_coerced_to_string():
+    """The ID is numeric-looking, and the model sometimes emits it as a JSON
+    int instead of a string — Pydantic's `str` field rejects that outright
+    rather than coercing, which used to drop the whole day."""
+    s = StructuredSession(for_date=date(2026, 8, 13), kind="strength", title="Full Body A",
+                           garmin_workout_id=1631813108)
+    assert s.garmin_workout_id == "1631813108"
+
+
+def test_garmin_workout_id_string_and_none_are_unaffected():
+    s = StructuredSession(for_date=date(2026, 8, 13), kind="strength", title="Full Body A",
+                           garmin_workout_id="1631813108")
+    assert s.garmin_workout_id == "1631813108"
+    assert StructuredSession(for_date=date(2026, 8, 13), kind="rest",
+                              title="Rest").garmin_workout_id is None

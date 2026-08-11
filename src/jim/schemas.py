@@ -107,6 +107,16 @@ class StructuredSession(BaseModel):
     # template's Garmin workout ID so the loop schedules the existing workout
     # (preserving loaded weights) instead of rebuilding it from `steps`.
     garmin_workout_id: str | None = None
+
+    # Caught testing live: the model sometimes emits the ID as a JSON number
+    # (it IS numeric-looking) rather than a string. Pydantic's `str` field
+    # does not coerce int -> str by default, so this silently dropped the
+    # whole day too — same failure class as the two null-coercions above,
+    # different field.
+    @field_validator("garmin_workout_id", mode="before")
+    @classmethod
+    def _garmin_id_as_string(cls, v: str | int | None) -> str | None:
+        return str(v) if isinstance(v, int) else v
     template_key: str | None = None
 
 

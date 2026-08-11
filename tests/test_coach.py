@@ -160,6 +160,16 @@ def test_a_day_with_explicit_null_sets_is_not_silently_dropped():
     assert out["draft"][0]["steps"][0]["sets"] == 1
 
 
+def test_a_day_with_an_integer_garmin_id_is_not_silently_dropped():
+    """Caught testing live: the model sent the (numeric-looking) Garmin ID as
+    a JSON int rather than a string, same silent-drop failure mode."""
+    d = day("2026-07-09", garmin_workout_id=1414012813, template_key="full_body_a", steps=[])
+    f = Fakes([{"reply": "ok", "draft": [d], "goals": None}])
+    out = converse("plan tomorrow", 1, f.deps())
+    assert len(out["draft"]) == 1
+    assert out["draft"][0]["garmin_workout_id"] == "1414012813"
+
+
 def test_draft_capped_at_seven_days():
     # Short days, so the weekly volume budget isn't the binding constraint here
     # — this is isolating the DRAFT_MAX_DAYS truncation.
@@ -228,6 +238,43 @@ def test_approve_schedules_by_id_and_creates_custom_days():
     assert len(f.kv["draft"]) == 3
     assert set(f.kv["pushed"]) == {"2026-07-09", "2026-07-10"}  # rest day not on watch
     assert "Full Body A" in summary and "rest day" in summary
+
+
+def test_approve_clears_the_watch_when_a_pushed_day_becomes_rest():
+    """Caught testing live: approve()'s pre-loop guard skipped clear_schedule
+    specifically for rest days ("nothing to replace"), so turning an
+    already-pushed day into rest and hitting approve left the stale real
+    workout on the watch while the summary falsely said "nothing scheduled"."""
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-09", kind="rest", title="Rest", steps=[])]
+    f.kv["pushed"] = {"2026-07-09": {"title": "Full Body A", "sig": "x", "pushed_at": 1}}
+    summary = approve(1, f.deps())
+    assert date(2026, 7, 9) in f.cleared
+    assert "2026-07-09" not in f.kv["pushed"]
+    assert "nothing scheduled" in summary
+
+
+def test_push_day_clears_the_watch_when_a_pushed_day_becomes_rest():
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-09", kind="rest", title="Rest", steps=[])]
+    f.kv["pushed"] = {"2026-07-09": {"title": "Full Body A", "sig": "x", "pushed_at": 1}}
+    out = push_day("2026-07-09", 1, f.deps())
+    assert date(2026, 7, 9) in f.cleared
+    assert out["push_status"] == {}
+    assert "nothing" in out["summary"]
+
+
+def test_rest_day_deletes_its_own_prior_one_off_adaptation():
+    """A rest day only unschedules via clear_schedule (which reads Garmin's
+    calendar), but a tracked one-off adaptation object still exists in the
+    athlete's Garmin workout library until explicitly deleted."""
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-09", kind="rest", title="Rest", steps=[])]
+    f.kv["pushed"] = {"2026-07-09": {"title": "Custom upper", "sig": "x", "pushed_at": 1}}
+    f.kv["jim_created_workouts"] = {"2026-07-09": {"workout_id": "old-adapt", "template_key": None}}
+    approve(1, f.deps())
+    assert "old-adapt" in f.deleted
+    assert "2026-07-09" not in f.kv["jim_created_workouts"]
 
 
 def test_adapted_template_day_pushes_the_edits_not_the_stock_workout():
