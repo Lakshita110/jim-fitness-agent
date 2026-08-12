@@ -48,7 +48,7 @@ approved in chat are recorded `source='chat'`.
 
 A companion `pushed` key remembers what actually reached the watch — per date, a
 title, timestamp, and a content hash of the session. Comparing that hash to the
-current draft is how the UI knows a day was *edited since it was pushed*, and
+current draft is how a client knows a day was *edited since it was pushed*, and
 re-pushing unschedules the old workout first so the watch never duplicates.
 
 ## 4. Episodic memory — what actually happened (Postgres)

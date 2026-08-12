@@ -1,10 +1,12 @@
-# Deploy Jim to Vercel (and put it on your phone)
+# Deploy Jim to Vercel
 
-Vercel serves the chat, Neon is the database, and Vercel Cron runs the nightly
-job. About 15 minutes end to end.
+Vercel serves the JSON API, Neon is the database, and Vercel Cron runs the
+nightly job. About 15 minutes end to end. This is a backend-only deploy — no
+HTML/frontend ships from this repo; whatever client you build talks to the
+API described in `docs/chat.md`.
 
 ```
-chat + cron ──▶ Vercel (serverless, api/index.py)
+API + cron  ──▶ Vercel (serverless, api/index.py)
 database    ──▶ Neon Postgres
 watch       ──▶ Garmin (via a session blob, see step 1)
 ```
@@ -25,7 +27,7 @@ they would on a normal box, and each is already handled:
 
 ## 1. Collect the secrets (5 min, on your laptop)
 
-**Chat key** — gates the chat. Generate a long random one:
+**Session secret** — signs session cookies. Generate a long random one:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -71,7 +73,7 @@ everything else still runs.
 
 `requirements.txt` is a single `.`, which installs the project from
 `pyproject.toml` — that's what makes `import jim` work *and* ships the SQL
-migrations and app icons inside the bundle.
+migrations inside the bundle.
 
 ## 4. Set the environment variables
 
@@ -92,7 +94,7 @@ Project → **Settings → Environment Variables**:
 
 `GARMIN_TOKENS`/`GARMIN_EMAIL` only bootstrap the *original* athlete's account
 (consumed by `scripts/backfill_users.py`, below) — every other account
-connects Garmin itself through `/settings/garmin` in the browser, and its
+connects Garmin itself via `POST /settings/garmin/connect`, and its
 credentials live encrypted in `user_credentials`, not in an env var.
 
 ## 5. Deploy and check
@@ -101,7 +103,7 @@ credentials live encrypted in `user_credentials`, not in an env var.
 curl https://<your-app>.vercel.app/health          # {"status":"ok"}
 ```
 
-The first chat request applies the migrations automatically.
+The first API request applies the migrations automatically.
 
 **Deployment ordering (existing single-user data only):** if this deploy has
 prior single-user data (`garmin_daily`, `kv`, etc. with no `user_id` yet),
@@ -136,29 +138,17 @@ DATABASE_URL="postgres://…neon…" python -c "from jim.db import kv_set; kv_se
 That last line clears the cached state snapshot — without it the cards keep
 showing stale "no data" for up to an hour.
 
-## 7. Put it on your phone 📱
+## 7. Sign in and talk to it
 
-Open the login page **on your phone**:
+`POST https://<your-app>.vercel.app/auth/signup` (or `/auth/login` — see
+`scripts/backfill_users.py` for creating the original athlete's account from
+the credentials already in Vercel's env vars) to get a session cookie. A
+successful sign-in sets an httpOnly session cookie (~13 months), so a client
+only ever logs in once; every `/chat/*` and `/settings/garmin/*` request
+after that authenticates with the cookie. See `docs/chat.md` for the full
+endpoint list.
 
-```
-https://<your-app>.vercel.app/login
-```
-
-Sign in (or sign up — see `scripts/backfill_users.py` for creating the
-original athlete's account from the credentials already in Vercel's env
-vars), then install it — it's a real PWA, so it gets its own icon and opens
-fullscreen with no browser chrome:
-
-- **iOS / Safari** — Share → **Add to Home Screen**
-- **Android / Chrome** — ⋮ → **Install app**
-
-The installed app launches straight into the chat. You only ever log in once:
-a successful sign-in sets an httpOnly session cookie (~13 months) and the
-manifest's `start_url` is the bare `/chat`, authenticated by that cookie. No
-secret is baked into the manifest or the icons, which is why the browser can
-fetch both during install.
-
-> **Your password is the only thing protecting your chat.** Anyone who signs in
+> **Your password is the only thing protecting your account.** Anyone who signs in
 > can talk to Jim and push workouts to your watch. To invalidate every session
 > at once (e.g. after rotating secrets): change `SESSION_SECRET` in Vercel and
 > redeploy — every existing session cookie is signed with the old key, so they
@@ -191,22 +181,9 @@ curl -H "Authorization: Bearer $CRON_SECRET" \
 Vercel Cron on Hobby also fires only **once per day**, at an approximate time —
 fine for a nightly, but it's not a precise scheduler.
 
-## Changing the icon
-
-The home-screen icon is 💪:
-
-```bash
-pip install -e ".[dev]"
-python scripts/make_icon.py "🏋️"    # any emoji
-git add src/jim/static && git commit -m "New icon"
-```
-
-The PNGs are committed and served as static bytes, so production needs neither
-Pillow nor an emoji font.
-
 ## Troubleshooting
 
-**Chat 500s / "no data" everywhere** — the DB was unreachable, so migrations were
+**API 500s / "no data" everywhere** — the DB was unreachable, so migrations were
 skipped. Check `DATABASE_URL`; they retry on the next request.
 
 **Garmin calls fail with an auth error** — the session blob expired. Re-run

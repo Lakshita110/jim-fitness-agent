@@ -2,12 +2,16 @@
 
 A personal training agent, multi-tenant — each signed-up account (email +
 password) connects its own Garmin and edits its own playbook. Plans come from
-talking to **Jim's chat** — a lightweight self-hosted chat where the athlete
-reasons with Jim about the next session within their joint constraints (using
-real Garmin history), iterates on the plan (or the whole week), keeps
-long-term goals in plain language, and pushes to Garmin with one button.
+talking to **Jim's chat** via its JSON API — the athlete (through whatever
+client talks to that API) reasons with Jim about the next session within
+their joint constraints (using real Garmin history), iterates on the plan (or
+the whole week), keeps long-term goals in plain language, and pushes to
+Garmin with one call.
 Nightly housekeeping keeps that history fresh (Garmin sync, adherence
 reconcile, stale-workout cleanup) but never writes a plan itself.
+
+This is a backend-only API — no HTML/frontend is included in this repo. A UI
+is expected to be built separately against the endpoints below.
 
 Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 [docs/architecture.md](docs/architecture.md). Milestone status:
@@ -20,9 +24,10 @@ Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 - [ ] **M5** — Eval suite gating `AUTO_PUSH` — not started; needs a chat-turn eval shape
       (the old nightly-auto-compose scaffold was retired along with that code path)
 
-Interactive surface: **the chat** (docs/chat.md). Memory model incl. long-term
-goals: docs/memory.md. Intensity is steered by a readiness read (acute:chronic
-workload ratio + recovery → push/steady/ease/rest, `tools/history.py`).
+Interactive surface: **the chat API** (docs/chat.md). Memory model incl.
+long-term goals: docs/memory.md. Intensity is steered by a readiness read
+(acute:chronic workload ratio + recovery → push/steady/ease/rest,
+`tools/history.py`).
 
 ## Layout
 
@@ -34,7 +39,6 @@ src/jim/
   migrations/        # additive, idempotent SQL (001-009); ships inside the package
   auth.py            # email+password signup/login, session cookies, _require_user
   crypto.py          # AES-GCM encrypt/decrypt for Garmin creds at rest
-  static/            # committed PWA icons (no Pillow at runtime)
   tools/             # garmin, history, research (gated), memory
   agent/
     validate.py      # hard safety guardrail + advisory balance + fallback (used by coach.py)
@@ -42,9 +46,8 @@ src/jim/
                       #   + reconcile.py
   playbook.py        # per-account playbook (Postgres JSONB); disk YAML is the signup seed
   coach.py           # Jim's chat: composes drafts, goals memory, approve -> Garmin
-  app.py             # FastAPI app + health, /api/cron/nightly, static/manifest, /login —
-                      #   wires in web/
-  web/               # route groups: auth, chat, playbook, garmin onboarding, deps, templates
+  app.py             # FastAPI app + health, /api/cron/nightly — wires in web/
+  web/               # route groups (JSON only): auth, chat, playbook, garmin onboarding, deps
 api/index.py         # Vercel entrypoint — re-exports app.app as the ASGI handler
 playbook/            # editable memory: base_workouts.yaml (workout library + rotation), directives.md
 data/corpus/         # curated research corpus (seeded by scripts/seed_corpus.py)
@@ -77,15 +80,14 @@ pytest
 
 ```bash
 python -m jim.jobs.nightly        # nightly housekeeping: sync + reconcile + cleanup
-uvicorn jim.app:app --reload      # local service; sign in/up at /login, chat at /chat
+uvicorn jim.app:app --reload      # local service; JSON API at /auth, /chat, /api/playbook, /settings/garmin
 python scripts/backfill.py 90     # backfill Garmin history into Postgres
 ```
 
 ## Deploy
 
-**[DEPLOY.md](DEPLOY.md)** — Vercel serves the chat (`vercel.json` +
+**[DEPLOY.md](DEPLOY.md)** — Vercel serves the API (`vercel.json` +
 `api/index.py`), Neon is the database, and Vercel Cron hits `/api/cron/nightly`.
-Then install the chat to your phone's home screen as a PWA.
 
 Three things that bite if you skip the guide. Serverless has no reliable startup
 hook, so migrations run on the request path (`db.ensure_migrated()`), not at boot.

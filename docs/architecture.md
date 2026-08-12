@@ -8,12 +8,12 @@ that reaches the watch, and memory split by how durable it is.
 flowchart TB
     subgraph you["You"]
         WATCH["Garmin watch"]
-        PHONE["Phone — Jim's chat<br/>(add-to-home-screen page)"]
+        CLIENT["Any client of the JSON API<br/>(no frontend shipped in this repo)"]
     end
 
     subgraph vercel["Vercel"]
-        subgraph web["web service (FastAPI)"]
-            CHATUI["/chat page + API + PWA<br/>/login email+password → session cookie"]
+        subgraph web["web service (FastAPI, JSON-only)"]
+            CHATAPI["/chat/* JSON API<br/>/auth/* email+password → session cookie"]
             SETTINGS["/settings/garmin, /api/playbook<br/>Garmin connect + playbook editor"]
             COACH["coach.py<br/>conversation engine, per user_id<br/>MODEL_FAST via OpenRouter"]
         end
@@ -48,15 +48,15 @@ flowchart TB
     PLAYBOOK --> COACH
     VALIDATE -->|"validated draft"| KV
 
-    PHONE <--> CHATUI <--> COACH
-    PHONE <--> SETTINGS -->|"encrypted creds ·<br/>playbook JSON"| USERS
+    CLIENT <--> CHATAPI <--> COACH
+    CLIENT <--> SETTINGS -->|"encrypted creds ·<br/>playbook JSON"| USERS
     COACH <--> KV
     COACH -->|"draft days"| VALIDATE
     COACH <--> EXH & WKH & RESEARCH
     EXH --> TABLES
     WKH --> TABLES
 
-    CHATUI -->|"Push to Garmin<br/>(explicit approve)"| GARMINAPI
+    CHATAPI -->|"Push to Garmin<br/>(explicit /chat/approve)"| GARMINAPI
     GARMINAPI -->|"scheduled workout<br/>syncs to watch"| WATCH
 ```
 
@@ -98,8 +98,8 @@ Template days schedule the existing Garmin workout by ID (loaded weights
 preserved); adapted days are created fresh. Re-pushing a day unschedules the
 previous one first, so the watch never ends up with duplicates. Pushed days are
 recorded `source='chat'` and tracked in the `pushed` kv map with a content
-hash, which is what lets the UI badge a day as *pushed* or *modified since
-push*.
+hash, which is what lets a client badge a day as *pushed* or *modified since
+push* by comparing it against the returned `push_status`.
 
 ## Multi-tenant data model
 

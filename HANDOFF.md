@@ -10,14 +10,15 @@ garmin_strength).
 
 A personal training agent, multi-tenant: each signed-up account connects its
 own Garmin, edits its own playbook, and gets its own nightly housekeeping run.
-Plans come from talking to **Jim's chat** — a self-hosted page where the
-athlete reasons with Jim about the next session within their knee/ankle
+Plans come from talking to **Jim's chat**, a JSON API (`docs/chat.md`) where
+the athlete reasons with Jim about the next session within their knee/ankle
 constraints (using real Garmin history) and pushes structured workouts to
 Garmin on approve. Nightly housekeeping just keeps that history fresh — it
 never writes a plan itself.
 Python 3.11+, FastAPI, Postgres, OpenRouter (via the `openai` SDK),
-`garminconnect`. No build step — the whole chat UI is one inline HTML string in
-`src/jim/web/templates.py`.
+`garminconnect`. Backend-only: there is no HTML/frontend in this repo — the
+old inline chat UI was scrapped, and a new UI is expected to be built
+separately against the JSON API.
 
 Work happens on `main` (github.com/Lakshita110/jim-fitness-agent).
 `AUTO_PUSH=False`: nothing auto-schedules — workouts reach the watch
@@ -56,7 +57,8 @@ cp .env.example .env
 - `OPENROUTER_API_KEY`, `TAVILY_API_KEY`.
 - `DATABASE_URL=postgresql://jim:jim@localhost:5432/jim`
 - `SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY` — long random strings (auth is
-  now email+password at `/login`, not a shared URL key — see `docs/chat.md`).
+  email+password via `POST /auth/login`, not a shared URL key — see
+  `docs/chat.md`).
 - `APP_TIMEZONE` — yours.
 
 `CRON_SECRET` and `GARMIN_TOKENS` are for the serverless deploy only (DEPLOY.md);
@@ -71,11 +73,13 @@ python scripts/backfill.py 120    # first run: pull ~120d of Garmin history
 uvicorn jim.app:app --reload
 ```
 
-Open **http://127.0.0.1:8000/login** and sign up (or run
-`python scripts/backfill_users.py` to create the original athlete's account
-from the credentials already in `.env`). Signing in sets a session cookie, so
-subsequent visits go straight to `/chat`. Try "plan my week" or "my knee is
-sore today".
+`POST http://127.0.0.1:8000/auth/signup` with `{"email", "password"}` to sign
+up (or run `python scripts/backfill_users.py` to create the original
+athlete's account from the credentials already in `.env`). Signing in sets a
+session cookie, so subsequent requests to `/chat/*` need no key or password.
+Try `POST /chat/message` with `{"text": "plan my week"}` or
+`{"text": "my knee is sore today"}` — see `docs/chat.md` for the full
+endpoint list.
 
 ## Gotchas learned the hard way
 
