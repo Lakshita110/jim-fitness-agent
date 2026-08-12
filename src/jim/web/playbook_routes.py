@@ -47,9 +47,7 @@ def post_playbook(body: PlaybookBody, request: Request) -> dict:
 
 class GarminWorkoutImportBody(BaseModel):
     workout_id: str
-    key: str
     label: str | None = None
-    add_to_rotation: bool = False
 
 
 @router.get("/api/garmin/workouts")
@@ -95,8 +93,8 @@ def import_garmin_workout(body: GarminWorkoutImportBody, request: Request) -> di
 
     try:
         promote_garmin_workout(
-            user.id, body.workout_id, body.key,
-            label=body.label, add_to_rotation=body.add_to_rotation,
+            user.id, body.workout_id, f"garmin_{body.workout_id}",
+            label=body.label, add_to_rotation=True,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

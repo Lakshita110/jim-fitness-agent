@@ -121,12 +121,7 @@ header { padding: 16px 22px 10px; display: flex; align-items: center; gap: 12px;
              padding: 10px; background: rgba(255,255,255,.03); border: 1px solid var(--glass-line);
              border-radius: 12px; }
 .pb-import-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.pb-import select, .pb-import input[type="text"] { background: rgba(255,255,255,.04);
-             border: 1px solid var(--glass-line); border-radius: 8px; color: var(--ink);
-             font-family: inherit; font-size: 12px; padding: 6px 8px; }
 #pbGarminSelect { flex: 1 1 220px; min-width: 160px; }
-#pbImportKey { flex: 0 1 160px; }
-.pb-import-rot { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .pb-import-btn { padding: 6px 14px; border: none; border-radius: 999px;
              background: linear-gradient(145deg, var(--sage), var(--sage-dim)); color: #1a2013;
              font-weight: 600; font-size: 12px; font-family: inherit; cursor: pointer; }
@@ -360,10 +355,6 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
             <button type="button" class="gw-select-btn placeholder" id="pbGarminSelectBtn">Loading Garmin workouts…</button>
             <div class="gw-select-list" id="pbGarminSelectList"></div>
           </div>
-          <input id="pbImportKey" type="text" placeholder="key (e.g. full_body_d)" />
-        </div>
-        <div class="pb-import-row">
-          <label class="pb-import-rot"><input id="pbAddToRotation" type="checkbox" /> add to rotation</label>
           <button type="button" class="pb-import-btn" id="pbImportBtn">Import</button>
         </div>
       </div>
@@ -810,7 +801,7 @@ async function openPlaybook() {
   try {
     const r = await fetch("/api/playbook");
     const text = await r.text();
-    if (!r.ok) { pbSetMsg("Couldn't load playbook", "err"); return; }
+    if (!r.ok) { pbSetMsg("couldn't load playbook", "err"); return; }
     pbText.value = text; pbSetMsg("");
     setPbData(JSON.parse(text));
   } catch { pbSetMsg("network error", "err"); }
@@ -924,8 +915,6 @@ pbDirPreviewTab.addEventListener("click", () => showDirectivesTab(false));
 const pbGarminSelectBtn = document.getElementById("pbGarminSelectBtn");
 const pbGarminSelectList = document.getElementById("pbGarminSelectList");
 const pbImportBtn = document.getElementById("pbImportBtn");
-const pbImportKey = document.getElementById("pbImportKey");
-const pbAddToRotation = document.getElementById("pbAddToRotation");
 let pbGarminWorkoutId = "";
 let pbAllWorkouts = [];
 function gwSetPlaceholder(text) {
@@ -941,7 +930,7 @@ function renderGarminOptions() {
   gwSetPlaceholder("Select a Garmin workout…");
   pbGarminSelectList.innerHTML = visible.map(w => {
     const name = (w.name || "(untitled)").replace(/"/g, "&quot;");
-    return `<div class="gw-select-opt" data-id="${w.workout_id}" data-name="${name}" data-template-key="${w.template_key || ""}">${esc(w.name || "(untitled)")}</div>`;
+    return `<div class="gw-select-opt" data-id="${w.workout_id}" data-name="${name}">${esc(w.name || "(untitled)")}</div>`;
   }).join("");
 }
 async function loadGarminWorkouts() {
@@ -949,7 +938,7 @@ async function loadGarminWorkouts() {
   try {
     const r = await fetch("/api/garmin/workouts");
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) { gwSetPlaceholder(data.detail || "Couldn't load Garmin workouts"); return; }
+    if (!r.ok) { gwSetPlaceholder(data.detail || "couldn't load Garmin workouts"); return; }
     pbAllWorkouts = data.workouts || [];
     renderGarminOptions();
   } catch { gwSetPlaceholder("network error"); }
@@ -965,21 +954,15 @@ pbGarminSelectList.addEventListener("click", (e) => {
   pbGarminSelectBtn.textContent = opt.dataset.name;
   pbGarminSelectBtn.classList.remove("placeholder");
   pbGarminSelectList.classList.remove("open");
-  if (opt.dataset.templateKey && !pbImportKey.value.trim()) {
-    pbImportKey.value = opt.dataset.templateKey;
-  }
 });
 document.addEventListener("click", () => pbGarminSelectList.classList.remove("open"));
 pbImportBtn.addEventListener("click", async () => {
-  const workout_id = pbGarminWorkoutId, key = pbImportKey.value.trim();
+  const workout_id = pbGarminWorkoutId;
   if (!workout_id) { pbSetMsg("pick a Garmin workout first", "err"); return; }
-  if (!key) { pbSetMsg("give it a playbook key", "err"); return; }
   pbImportBtn.disabled = true; pbSetMsg("Importing…");
   try {
     const r = await fetch("/api/garmin/workouts/import", { method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        workout_id, key, add_to_rotation: pbAddToRotation.checked,
-      }) });
+      body: JSON.stringify({ workout_id }) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { pbSetMsg(data.error || data.detail || "import failed", "err"); return; }
     setPbData(data.playbook);
@@ -1228,7 +1211,7 @@ button.submit:disabled { opacity: .5; cursor: default; }
       <input id="gPassword" type="password" autocomplete="current-password" required>
     </div>
     <div class="err" id="connectErr"></div>
-    <button class="submit" type="submit">Connect</button>
+    <button class="submit" type="submit" id="connectBtn">Connect</button>
   </form>
 
   <form id="mfaForm" class="hidden">
@@ -1237,7 +1220,7 @@ button.submit:disabled { opacity: .5; cursor: default; }
       <input id="gMfa" type="text" inputmode="numeric" autocomplete="one-time-code" required>
     </div>
     <div class="err" id="mfaErr"></div>
-    <button class="submit" type="submit">Verify</button>
+    <button class="submit" type="submit" id="mfaBtn">Verify</button>
   </form>
 
   <a class="back" href="/chat">&larr; Back to chat</a>
@@ -1245,6 +1228,7 @@ button.submit:disabled { opacity: .5; cursor: default; }
 <script>
 const connectForm = document.getElementById("connectForm"), mfaForm = document.getElementById("mfaForm");
 const connectErr = document.getElementById("connectErr"), mfaErr = document.getElementById("mfaErr");
+const connectBtn = document.getElementById("connectBtn"), mfaBtn = document.getElementById("mfaBtn");
 const connectedState = document.getElementById("connectedState"), trustNote = document.getElementById("trustNote");
 const connectedEmail = document.getElementById("connectedEmail"), reconnectBtn = document.getElementById("reconnectBtn");
 
@@ -1281,6 +1265,7 @@ reconnectBtn.addEventListener("click", () => {
 connectForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   connectErr.textContent = "";
+  connectBtn.disabled = true; connectBtn.textContent = "Connecting…";
   try {
     const data = await post("/settings/garmin/connect", {
       garmin_email: document.getElementById("gEmail").value.trim(),
@@ -1292,16 +1277,25 @@ connectForm.addEventListener("submit", async (e) => {
     } else {
       showConnectedState(document.getElementById("gEmail").value.trim());
     }
-  } catch (err) { connectErr.textContent = err.message; }
+  } catch (err) {
+    connectErr.textContent = err.message;
+  } finally {
+    connectBtn.disabled = false; connectBtn.textContent = "Connect";
+  }
 });
 
 mfaForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   mfaErr.textContent = "";
+  mfaBtn.disabled = true; mfaBtn.textContent = "Verifying…";
   try {
     await post("/settings/garmin/mfa", { mfa_code: document.getElementById("gMfa").value.trim() });
     mfaForm.classList.add("hidden");
     showConnectedState(document.getElementById("gEmail").value.trim());
-  } catch (err) { mfaErr.textContent = err.message; }
+  } catch (err) {
+    mfaErr.textContent = err.message;
+  } finally {
+    mfaBtn.disabled = false; mfaBtn.textContent = "Verify";
+  }
 });
 </script></body></html>"""
