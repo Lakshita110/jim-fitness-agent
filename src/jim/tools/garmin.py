@@ -47,7 +47,12 @@ def client(user_id: int) -> Any:
     2. garmin_password — fallback re-auth when there's no usable token blob.
     """
     if user_id not in _clients:
-        from garminconnect import Garmin
+        from garminconnect import (
+            Garmin,
+            GarminConnectAuthenticationError,
+            GarminConnectConnectionError,
+            GarminConnectTooManyRequestsError,
+        )
 
         from jim.db import get_user_credentials
 
@@ -66,10 +71,30 @@ def client(user_id: int) -> Any:
                     f" session blob is >{MIN_TOKEN_BLOB_CHARS}. It was likely truncated."
                 )
             log.info("garmin: authenticating user %s from stored tokens blob", user_id)
-            garmin.login(tokens)
+            login_args: tuple[str, ...] = (tokens,)
         else:
             log.info("garmin: authenticating user %s from stored password", user_id)
-            garmin.login()
+            login_args = ()
+        try:
+            garmin.login(*login_args)
+        except GarminConnectAuthenticationError as e:
+            raise RuntimeError(
+                f"Garmin login failed for user {user_id} — the stored session/password"
+                " is no longer valid. Reconnect Garmin in Settings."
+            ) from e
+        except (GarminConnectTooManyRequestsError, GarminConnectConnectionError) as e:
+            raise RuntimeError(
+                "Garmin is temporarily unreachable — try again shortly."
+            ) from e
+        except Exception as e:
+            # garminconnect talks to an undocumented API, so failures beyond the
+            # three typed exceptions above (network blips, unexpected response
+            # shapes, etc.) are common — surface a clean message instead of a
+            # raw exception bubbling out of every read/write call.
+            log.exception("unexpected error during garmin login for user %s", user_id)
+            raise RuntimeError(
+                f"Garmin login failed unexpectedly for user {user_id}."
+            ) from e
         _clients[user_id] = garmin
     return _clients[user_id]
 
