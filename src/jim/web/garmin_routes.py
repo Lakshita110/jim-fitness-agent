@@ -10,6 +10,7 @@ the Garmin/Client instance itself). So the in-progress client has to be held
 server-side between the two requests; it is NEVER persisted to the DB, only
 kept in this process-local dict with a short TTL."""
 
+import logging
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,6 +19,8 @@ from pydantic import BaseModel
 
 from jim.web import deps
 from jim.web.templates import GARMIN_PAGE
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -81,10 +84,19 @@ def garmin_connect(body: GarminConnectBody, request: Request) -> dict:
     except GarminConnectAuthenticationError as e:
         raise HTTPException(
             status_code=400,
-            detail="Garmin login failed — check your email and password.",
+            detail="Garmin login failed — check your email and password",
         ) from e
     except (GarminConnectTooManyRequestsError, GarminConnectConnectionError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        # garminconnect talks to an undocumented API, so failures beyond the
+        # three typed exceptions above (network blips, unexpected response
+        # shapes, etc.) are common — surface a clean message instead of a raw 500.
+        log.exception("unexpected error during garmin login for user %s", user.id)
+        raise HTTPException(
+            status_code=400,
+            detail="Garmin login failed unexpectedly — try again in a moment",
+        ) from e
 
     if mfa_status == "needs_mfa":
         _pending_garmin_logins[user.id] = {
@@ -95,7 +107,14 @@ def garmin_connect(body: GarminConnectBody, request: Request) -> dict:
         }
         return {"mfa_required": True}
 
-    _save_garmin_login(user.id, body.garmin_email, body.garmin_password, g)
+    try:
+        _save_garmin_login(user.id, body.garmin_email, body.garmin_password, g)
+    except Exception as e:
+        log.exception("failed to save garmin credentials for user %s", user.id)
+        raise HTTPException(
+            status_code=400,
+            detail="couldn't save your Garmin connection — try again",
+        ) from e
     return {"ok": True}
 
 
@@ -108,7 +127,7 @@ def garmin_mfa(body: GarminMfaBody, request: Request) -> dict:
         _pending_garmin_logins.pop(user.id, None)
         raise HTTPException(
             status_code=400,
-            detail="No pending Garmin login (or it expired) — start again.",
+            detail="no pending Garmin login (or it expired) — start again",
         )
     g = pending["client"]
     try:
@@ -117,9 +136,16 @@ def garmin_mfa(body: GarminMfaBody, request: Request) -> dict:
         # Wrong code — leave the pending login in place so the user can retry
         # without re-entering email/password.
         raise HTTPException(
-            status_code=400, detail="Invalid MFA code — try again."
+            status_code=400, detail="invalid MFA code — try again"
         ) from e
 
     _pending_garmin_logins.pop(user.id, None)
-    _save_garmin_login(user.id, pending["email"], pending["password"], g)
+    try:
+        _save_garmin_login(user.id, pending["email"], pending["password"], g)
+    except Exception as e:
+        log.exception("failed to save garmin credentials for user %s after mfa", user.id)
+        raise HTTPException(
+            status_code=400,
+            detail="couldn't save your Garmin connection — try again",
+        ) from e
     return {"ok": True}
