@@ -9,6 +9,9 @@ reconcile, cleanup) but never writes a plan itself; workouts reach the watch
 only when the athlete presses a button.
 Not a product — real accounts and real per-user isolation, but one deployment,
 one Postgres, one operator.
+Backend-only: this is a pure JSON API with no HTML/frontend routes. The old
+inline HTML/CSS/JS pages have been scrapped; a new UI will be built separately
+against the API described below.
 
 ## Module table
 
@@ -16,7 +19,7 @@ one Postgres, one operator.
 |---|---|---|
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, wires in `web/` routers | active |
-| `src/jim/web/{auth,chat,garmin,playbook}_routes.py`, `deps.py`, `templates.py` | HTTP routes + inline no-build-step HTML/CSS/JS pages | active |
+| `src/jim/web/{auth,chat,garmin,playbook}_routes.py`, `deps.py` | Pure JSON API routes (no HTML) | active |
 | `src/jim/coach.py` | Chat: conversation, lookups, draft merge, goals memory, push, `plan_week()` | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
 | `src/jim/playbook.py` | Load/save the per-user playbook (Postgres JSONB); disk YAML is seed only | active |

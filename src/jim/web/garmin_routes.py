@@ -14,11 +14,9 @@ import logging
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 from jim.web import deps
-from jim.web.templates import GARMIN_PAGE
 
 log = logging.getLogger(__name__)
 
@@ -44,13 +42,6 @@ def _save_garmin_login(user_id: int, email: str, password: str, g: object) -> No
     db.save_user_credentials(
         user_id, garmin_email=email, garmin_password=password, garmin_tokens=blob
     )
-
-
-@router.get("/settings/garmin")
-def garmin_settings_page(request: Request) -> Response:
-    if deps._current_user(request) is None:
-        return RedirectResponse("/login", status_code=303)
-    return HTMLResponse(GARMIN_PAGE)
 
 
 @router.get("/api/garmin/status")

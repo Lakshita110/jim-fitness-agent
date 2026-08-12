@@ -2,11 +2,11 @@
 
 Vercel's Python runtime looks for an ASGI app named `app` in a module under
 api/, and vercel.json rewrites every path here — so this one function serves the
-whole thing: the chat, the icons, and the nightly cron endpoint.
+whole thing: the JSON API routes and the nightly cron endpoint.
 
 The `jim` package is a real installed dependency (requirements.txt installs the
-project itself), not a sys.path hack, so its package data — the migrations and
-the home-screen icons — ships with the bundle.
+project itself), not a sys.path hack, so its package data — the migrations —
+ships with the bundle.
 """
 
 from jim.app import app

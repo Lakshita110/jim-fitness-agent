@@ -83,12 +83,6 @@ class FakeGarminBadPassword:
         raise garminconnect.GarminConnectAuthenticationError("Authentication failed (401)")
 
 
-def test_settings_garmin_page_requires_auth(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    r = client.get("/settings/garmin", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/login"
-
-
 def test_connect_requires_auth(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     r = client.post(
@@ -230,12 +224,3 @@ def test_wrong_password_returns_clear_error_not_500(monkeypatch):
     assert r.status_code == 400
     assert "detail" in r.json()
     assert saved_calls == []
-
-
-def test_connect_page_states_password_is_stored(monkeypatch):
-    """The trust-note requirement: visible on the form, not buried."""
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    _sign_in(monkeypatch)
-    r = client.get("/settings/garmin")
-    assert r.status_code == 200
-    assert "store your Garmin password, encrypted" in r.text

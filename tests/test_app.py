@@ -51,27 +51,6 @@ def test_health():
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_chat_page_redirects_to_login_when_unauthenticated(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    r = client.get("/chat", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/login"
-
-
-def test_chat_page_serves_when_authenticated(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    _sign_in(monkeypatch)
-    ok = client.get("/chat")
-    assert ok.status_code == 200
-    assert "Jim" in ok.text
-
-
-def test_login_page_is_public():
-    r = client.get("/login")
-    assert r.status_code == 200
-    assert "Jim" in r.text
-
-
 def test_chat_message_flow(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     monkeypatch.setattr(
@@ -260,13 +239,4 @@ def test_logout_clears_cookie_and_subsequent_requests_are_unauthenticated(monkey
 def test_forged_cookie_resolves_to_unauthenticated_not_a_crash(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     client.cookies.set(auth.SESSION_COOKIE_NAME, "not-a-real-token")
-    r = client.get("/chat", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/login"  # bounced, no crash
-    assert client.get("/chat/state").status_code == 403
-
-
-def test_manifest_is_public_and_carries_no_secret(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    r = client.get("/manifest.webmanifest")
-    assert r.status_code == 200                     # installable without signing in
-    assert r.json()["start_url"] == "/chat"          # clean start_url
+    assert client.get("/chat/state").status_code == 403  # bounced, no crash

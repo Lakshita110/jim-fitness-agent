@@ -1,33 +1,24 @@
-"""Thin FastAPI service (PLAN.md §5): health check, nightly housekeeping cron, and
-Jim's chat — a private, mobile-friendly page (add to home screen) where the
-athlete iterates on plans and pushes them to Garmin on approve.
+"""Thin FastAPI service (PLAN.md §5): health check and nightly housekeeping cron.
 
 Deployed on Vercel as a single serverless function (api/index.py), so the nightly
 job is exposed here as /api/cron/nightly for Vercel Cron to ping, and migrations
 are ensured on the request path rather than at startup (see db.ensure_migrated).
 
 Routes live in jim.web.*_routes, grouped by concern (auth, chat, playbook,
-garmin onboarding); this module wires them together plus the handful of routes
-(health, cron, static/manifest, /login) too small to warrant their own file."""
+garmin onboarding); this module wires them together plus health/cron, too small
+to warrant their own file. This is a JSON API only — no HTML/frontend routes."""
 
 import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from jim.config import settings
 from jim.web import auth_routes, chat_routes, garmin_routes, playbook_routes
-from jim.web.deps import _current_user
-from jim.web.templates import LOGIN_PAGE
 
 log = logging.getLogger(__name__)
-
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-ICON_SIZES = (180, 192, 512)
 
 
 @asynccontextmanager
@@ -83,59 +74,3 @@ def cron_nightly(request: Request) -> dict:
         result.get("elapsed_sec"), len(result.get("users", {})),
     )
     return result
-
-
-# --- home-screen install (DEPLOY.md) -----------------------------------------
-# Neither the icons nor the manifest carry a secret any more (start_url is the
-# bare /chat, authenticated by cookie), so both are public. That also means the
-# browser can fetch them during install without needing to send credentials.
-
-
-@app.get("/icon-{size}.png")
-def icon(size: int) -> Response:
-    if size not in ICON_SIZES:
-        raise HTTPException(status_code=404, detail="no icon at that size")
-    return Response(
-        (STATIC_DIR / f"icon-{size}.png").read_bytes(),
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=604800"},
-    )
-
-
-@app.get("/manifest.webmanifest")
-def manifest() -> JSONResponse:
-    # No key anywhere in here — start_url is the clean /chat and the installed app
-    # authenticates with its session cookie. Nothing secret, so it needs no gate.
-    return JSONResponse(
-        {
-            "name": "Jim — training coach",
-            "short_name": "Jim",
-            "description": "Your training partner in crime.",
-            "start_url": "/chat",
-            "scope": "/",
-            "display": "standalone",
-            "orientation": "portrait",
-            "background_color": "#0F100D",
-            "theme_color": "#0F100D",
-            "icons": [
-                {"src": f"/icon-{s}.png", "sizes": f"{s}x{s}", "type": "image/png",
-                 "purpose": "any maskable"}
-                for s in ICON_SIZES
-            ],
-        },
-        media_type="application/manifest+json",
-    )
-
-
-@app.get("/login")
-def login_page() -> Response:
-    return HTMLResponse(LOGIN_PAGE)
-
-
-@app.get("/{path:path}")
-def catch_all(request: Request, path: str) -> Response:
-    """Any unrecognized GET path bounces to /login (or /chat if already signed
-    in) instead of a bare 404 — mirrors how /chat itself handles a signed-out
-    visit. Registered last so it never shadows a real route."""
-    dest = "/chat" if _current_user(request) is not None else "/login"
-    return RedirectResponse(dest, status_code=303)
