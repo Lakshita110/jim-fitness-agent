@@ -1,14 +1,17 @@
 """M2 backfill: pull ~90 days of Garmin daily metrics + activities into
 Postgres so query_history has a real window. Idempotent (upserts).
 
-    python scripts/backfill.py [days]
+    python scripts/backfill.py [days] [--email EMAIL]
+
+Defaults to the first-created user (the original single-tenant behavior)
+when --email is omitted, so existing invocations keep working unchanged.
 """
 
+import argparse
 import logging
-import sys
 from datetime import date, timedelta
 
-from jim.auth import first_user_id
+from jim.auth import first_user_id, get_user_by_email
 from jim.db import connect, migrate
 from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets
 from jim.tools.garmin import get_exercise_sets, get_garmin_today
@@ -16,12 +19,18 @@ from jim.tools.garmin import get_exercise_sets, get_garmin_today
 log = logging.getLogger(__name__)
 
 
-def main(days: int = 90) -> None:
+def main(days: int = 90, email: str | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
     today = date.today()
     with connect() as conn:
         migrate(conn)
-        user_id = first_user_id()
+        if email:
+            user = get_user_by_email(email)
+            user_id = user.id if user else None
+            if user_id is None:
+                raise SystemExit(f"no user found with email {email!r}")
+        else:
+            user_id = first_user_id()
         if user_id is None:
             raise SystemExit("no users in the database — run scripts/backfill_users.py first")
         for offset in range(days, -1, -1):
@@ -59,4 +68,8 @@ def main(days: int = 90) -> None:
 
 
 if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 90)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("days", nargs="?", type=int, default=90)
+    parser.add_argument("--email", help="user to backfill (defaults to the first-created user)")
+    args = parser.parse_args()
+    main(args.days, args.email)
