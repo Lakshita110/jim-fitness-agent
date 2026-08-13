@@ -75,11 +75,14 @@ edit, not something you write through this tool. If they want to schedule
 an existing template for a day, use `schedule_workout` with the
 `workout_id` from `list_saved_workouts`, not `create_or_update_workout`.
 
-For the `kind` argument, use `strength`, `conditioning`, `mobility`, or
-`rest` — the tool will map Garmin's own vocabulary (`strength_training`,
-`cardio`, etc., the kind of thing you'll see reflected back from
-`get_scheduled_workouts`) automatically, but reach for the plain four when
-you're the one choosing.
+For the `kind` argument, use the specific one that matches the session —
+`strength`, `conditioning`, `mobility`, `rest`, `running`, `cycling`,
+`swimming`, `walking`, `hiking`, `yoga`, or `other`. A plain walk is
+`kind="walking"`, not "conditioning" — don't default to the generic bucket
+when a real one fits. The tool will also map Garmin's own vocabulary
+(`strength_training`, `run`, etc., the kind of thing you'll see reflected
+back from `get_scheduled_workouts`) automatically, but reach for the exact
+names above when you're the one choosing.
 
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 

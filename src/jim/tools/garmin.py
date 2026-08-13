@@ -471,12 +471,32 @@ def classify_all(
     return classified
 
 
+# strength (5/strength_training) and mobility (11/mobility) are verified
+# live (docs/garmin_strength.md) against the structured-workout-builder
+# endpoint specifically — that ID space isn't guaranteed to match Garmin's
+# generic activity-type IDs. The rest below come from garminconnect's own
+# documented SportType enum (garminconnect/workout.py) and are NOT yet
+# live-verified against this endpoint; if scheduling one of these comes back
+# rejected or mis-tagged, that's the first thing to check.
 SPORT_TYPES: dict[str, dict[str, Any]] = {
     "strength": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "strength_training": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "mobility": {"sportTypeId": 11, "sportTypeKey": "mobility"},
-    "conditioning": {"sportTypeId": 11, "sportTypeKey": "mobility"},
+    "yoga": {"sportTypeId": 11, "sportTypeKey": "mobility"},
+    "conditioning": {"sportTypeId": 8, "sportTypeKey": "other"},
+    "running": {"sportTypeId": 1, "sportTypeKey": "running"},
+    "cycling": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+    "swimming": {"sportTypeId": 3, "sportTypeKey": "swimming"},
+    "walking": {"sportTypeId": 4, "sportTypeKey": "walking"},
+    "hiking": {"sportTypeId": 7, "sportTypeKey": "hiking"},
+    "other": {"sportTypeId": 8, "sportTypeKey": "other"},
 }
+
+# Kinds whose steps are real Garmin exercise-library movements (push-ups,
+# squats, stretches, ...) — everything else (a run, a ride, a walk) is an
+# activity, not an "exercise", and forcing it through the strength taxonomy
+# produces a wrong or empty category/exerciseName match.
+_TAXONOMY_CLASSIFIED_KINDS = {"strength", "mobility"}
 
 
 def _emit_step(
@@ -598,7 +618,7 @@ def build_strength_payload(
     session's steps (walk, run, ride) aren't "exercises" in that taxonomy at
     all, so they skip classification and go out as plain description-only
     steps (see _emit_step's classify flag)."""
-    classify = session.kind != "conditioning"
+    classify = session.kind in _TAXONOMY_CLASSIFIED_KINDS
     classified = classify_all([s.exercise for s in session.steps], resolver) if classify else {}
     steps: list[dict[str, Any]] = []
     order = 1

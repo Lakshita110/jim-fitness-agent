@@ -9,7 +9,18 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-SessionKind = Literal["strength", "conditioning", "mobility", "rest"]
+# The four original buckets ("strength", "conditioning", "mobility", "rest")
+# are what the legacy coach.py/agent/validate.py guardrail path reasons
+# about and is all that path ever produces — kept exactly as-is so its
+# `kind == "conditioning"` / `kind in ("rest", "mobility")` checks keep
+# working unchanged. The MCP path (mcp_server.create_or_update_workout)
+# additionally accepts real, more specific Garmin sport types so a workout
+# doesn't have to be shoehorned into "conditioning" to be created — see
+# tools.garmin.SPORT_TYPES for what each maps to on Garmin's side.
+SessionKind = Literal[
+    "strength", "conditioning", "mobility", "rest",
+    "running", "cycling", "swimming", "walking", "hiking", "yoga", "other",
+]
 
 
 class ActivitySummary(BaseModel):

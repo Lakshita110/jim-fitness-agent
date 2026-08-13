@@ -102,7 +102,10 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
 
 
 def test_normalize_kind_passes_through_the_real_values():
-    for kind in ("strength", "conditioning", "mobility", "rest"):
+    for kind in (
+        "strength", "conditioning", "mobility", "rest",
+        "running", "cycling", "swimming", "walking", "hiking", "yoga", "other",
+    ):
         assert mcp_server_mod._normalize_kind(kind) == kind
 
 
@@ -110,13 +113,18 @@ def test_normalize_kind_maps_garmin_and_common_vocabulary():
     """The bug that actually happened: Claude read "strength_training" off
     get_scheduled_workouts/list_saved_workouts (Garmin's own sportType key)
     and passed it straight through, which used to blow up as a raw pydantic
-    422 with no indication of what to try instead."""
+    422 with no indication of what to try instead. A related bug: a plain
+    walk used to get bucketed into "conditioning" (and from there silently
+    tagged strength_training on Garmin — see test_garmin_payload.py) instead
+    of being recognized as its own kind."""
     assert mcp_server_mod._normalize_kind("strength_training") == "strength"
     assert mcp_server_mod._normalize_kind("fitness_equipment") == "strength"
     assert mcp_server_mod._normalize_kind("cardio") == "conditioning"
-    assert mcp_server_mod._normalize_kind("running") == "conditioning"
-    assert mcp_server_mod._normalize_kind("cycling") == "conditioning"
-    assert mcp_server_mod._normalize_kind("yoga") == "mobility"
+    assert mcp_server_mod._normalize_kind("run") == "running"
+    assert mcp_server_mod._normalize_kind("bike") == "cycling"
+    assert mcp_server_mod._normalize_kind("swim") == "swimming"
+    assert mcp_server_mod._normalize_kind("walk") == "walking"
+    assert mcp_server_mod._normalize_kind("hike") == "hiking"
     assert mcp_server_mod._normalize_kind("pilates") == "mobility"
     assert mcp_server_mod._normalize_kind("stretching") == "mobility"
     # Case/whitespace tolerant, since a model won't always match exactly.

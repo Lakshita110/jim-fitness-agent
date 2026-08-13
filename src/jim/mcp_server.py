@@ -36,29 +36,35 @@ from jim.tools.garmin import ADAPTED_WORKOUT_PREFIX
 
 # Claude reasonably reaches for Garmin's own vocabulary (it just read it from
 # get_scheduled_workouts/list_saved_workouts, which report sportType keys
-# like "strength_training") rather than the narrower set StructuredSession
-# actually accepts — normalize instead of a raw pydantic 422 that gives no
+# like "strength_training") rather than SessionKind's own spelling of the
+# same thing — normalize instead of a raw pydantic 422 that gives no
 # indication of what to try next.
 _KIND_ALIASES: dict[str, SessionKind] = {
     "strength_training": "strength",
     "fitness_equipment": "strength",
     "cardio": "conditioning",
-    "running": "conditioning",
-    "cycling": "conditioning",
-    "yoga": "mobility",
     "pilates": "mobility",
     "stretching": "mobility",
+    "run": "running",
+    "bike": "cycling",
+    "swim": "swimming",
+    "walk": "walking",
+    "hike": "hiking",
 }
+
+_VALID_KINDS = (
+    "strength", "conditioning", "mobility", "rest",
+    "running", "cycling", "swimming", "walking", "hiking", "yoga", "other",
+)
 
 
 def _normalize_kind(kind: str) -> SessionKind:
-    if kind in ("strength", "conditioning", "mobility", "rest"):
+    if kind in _VALID_KINDS:
         return kind  # type: ignore[return-value]
     normalized = _KIND_ALIASES.get(kind.strip().lower())
     if normalized is None:
         raise ToolError(
-            f"unrecognized kind {kind!r} — use one of strength, conditioning,"
-            " mobility, rest"
+            f"unrecognized kind {kind!r} — use one of {', '.join(_VALID_KINDS)}"
         )
     return normalized
 
@@ -204,10 +210,16 @@ def create_or_update_workout(
     version and `schedule_workout` it in place of the old (re-scheduling a
     day replaces what was there, it doesn't duplicate).
 
-    `kind` is one of: strength, conditioning, mobility, rest — not Garmin's
-    own sportType vocabulary (e.g. "strength_training"), which get_scheduled_
-    workouts/list_saved_workouts report; common Garmin values are mapped
-    automatically, but prefer the four above.
+    `kind` is one of: strength, conditioning, mobility, rest, running,
+    cycling, swimming, walking, hiking, yoga, other — pick the specific one
+    that matches the session rather than defaulting to conditioning; a plain
+    walk should be `kind="walking"`, not "conditioning". Garmin's own
+    sportType vocabulary (e.g. "strength_training", "run") is also accepted
+    and mapped automatically if that's what you read off get_scheduled_
+    workouts/list_saved_workouts, but prefer the exact names above when
+    you're the one choosing. strength/mobility steps get matched against
+    Garmin's exercise library (category + exerciseName); every other kind is
+    treated as a plain activity and just carries its description.
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,
