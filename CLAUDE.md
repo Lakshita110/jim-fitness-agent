@@ -30,6 +30,7 @@ template library used to hold now lives in Garmin's own workout library.
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, mounts the MCP app at `/mcp`, wires in `web/` routers | active |
 | `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints. Bearer-token auth, re-resolved per call (see its docstring for why) | active, new |
+| `skills/jim-coach/SKILL.md` | Operating instructions for Claude when it's the one calling the MCP tools — constraints-first, data-grounded recommendations, never write without an explicit ask, `set_constraints` is a full replace. This is the safety layer now that there's no code guardrail | active, new |
 | `src/jim/web/{auth,chat,garmin,playbook,constraints}_routes.py`, `deps.py` | Pure JSON API routes (no HTML). `auth_routes` now also returns a bearer token on login/signup for non-browser clients (the MCP server) | active |
 | `src/jim/coach.py` | Chat: conversation, lookups, draft merge, goals memory, push, `plan_week()` | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
