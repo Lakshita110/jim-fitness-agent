@@ -113,6 +113,32 @@ def debug_env(request: Request) -> dict:
     }
 
 
+@app.post("/api/debug/delete_orphaned_rows")
+def debug_delete_orphaned_rows(request: Request) -> dict:
+    """TEMPORARY — one-off cleanup. Pre-multi-tenant rows with user_id IS
+    NULL are blocking migration 008_user_pks.sql from promoting kv's (and
+    others') primary key to (user_id, ...), which is why kv upserts fail
+    with "no unique or exclusion constraint matching the ON CONFLICT
+    specification". Garmin remains the source of truth for this data
+    regardless, so deleting the orphaned rows (rather than backfilling them
+    onto an account) is safe — sync repopulates going forward. Remove this
+    endpoint once run.
+    """
+    from jim.db import connect
+    from jim.web import deps
+
+    deps._require_user(request)
+    deleted_counts = {}
+    with connect() as conn:
+        for table in ("kv", "garmin_daily", "garmin_activities", "exercise_sets"):
+            row = conn.execute(
+                f"DELETE FROM {table} WHERE user_id IS NULL RETURNING 1"
+            ).fetchall()
+            deleted_counts[table] = len(row)
+        conn.commit()
+    return {"deleted_counts": deleted_counts}
+
+
 @app.get("/api/cron/nightly")
 def cron_nightly(request: Request) -> dict:
     """The nightly housekeeping run, invoked by Vercel Cron (schedule in vercel.json).
