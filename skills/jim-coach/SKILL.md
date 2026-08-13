@@ -77,12 +77,14 @@ an existing template for a day, use `schedule_workout` with the
 
 For the `kind` argument, use the specific one that matches the session —
 `strength`, `conditioning`, `mobility`, `rest`, `running`, `cycling`,
-`swimming`, `walking`, `hiking`, `yoga`, or `other`. A plain walk is
-`kind="walking"`, not "conditioning" — don't default to the generic bucket
-when a real one fits. The tool will also map Garmin's own vocabulary
-(`strength_training`, `run`, etc., the kind of thing you'll see reflected
-back from `get_scheduled_workouts`) automatically, but reach for the exact
-names above when you're the one choosing.
+`swimming`, `walking`, `hiking`, `yoga`, `pilates`, `hiit`, `rucking`, or
+`other`. A plain walk is `kind="walking"`, not "conditioning" — don't
+default to the generic bucket when a real one fits. The tool will also map
+Garmin's own vocabulary (`strength_training`, `run`, etc., the kind of thing
+you'll see reflected back from `get_scheduled_workouts`) automatically, but
+reach for the exact names above when you're the one choosing. ("hiking" has
+no dedicated Garmin sportType and lands on Garmin as "other" — that's
+expected, not a bug.)
 
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 

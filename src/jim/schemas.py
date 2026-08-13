@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field, field_validator
 # tools.garmin.SPORT_TYPES for what each maps to on Garmin's side.
 SessionKind = Literal[
     "strength", "conditioning", "mobility", "rest",
-    "running", "cycling", "swimming", "walking", "hiking", "yoga", "other",
+    "running", "cycling", "swimming", "walking", "hiking", "yoga", "pilates",
+    "hiit", "rucking", "other",
 ]
 
 

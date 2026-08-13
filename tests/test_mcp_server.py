@@ -104,7 +104,8 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
 def test_normalize_kind_passes_through_the_real_values():
     for kind in (
         "strength", "conditioning", "mobility", "rest",
-        "running", "cycling", "swimming", "walking", "hiking", "yoga", "other",
+        "running", "cycling", "swimming", "walking", "hiking", "yoga",
+        "pilates", "hiit", "rucking", "other",
     ):
         assert mcp_server_mod._normalize_kind(kind) == kind
 
@@ -125,7 +126,7 @@ def test_normalize_kind_maps_garmin_and_common_vocabulary():
     assert mcp_server_mod._normalize_kind("swim") == "swimming"
     assert mcp_server_mod._normalize_kind("walk") == "walking"
     assert mcp_server_mod._normalize_kind("hike") == "hiking"
-    assert mcp_server_mod._normalize_kind("pilates") == "mobility"
+    assert mcp_server_mod._normalize_kind("ruck") == "rucking"
     assert mcp_server_mod._normalize_kind("stretching") == "mobility"
     # Case/whitespace tolerant, since a model won't always match exactly.
     assert mcp_server_mod._normalize_kind("  Cardio ") == "conditioning"

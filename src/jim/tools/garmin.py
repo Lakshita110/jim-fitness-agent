@@ -471,25 +471,26 @@ def classify_all(
     return classified
 
 
-# strength (5/strength_training) and mobility (11/mobility) are verified
-# live (docs/garmin_strength.md) against the structured-workout-builder
-# endpoint specifically — that ID space isn't guaranteed to match Garmin's
-# generic activity-type IDs. The rest below come from garminconnect's own
-# documented SportType enum (garminconnect/workout.py) and are NOT yet
-# live-verified against this endpoint; if scheduling one of these comes back
-# rejected or mis-tagged, that's the first thing to check.
+# Every entry below is live-verified against this athlete's real Garmin
+# account (create -> read back the stored sportType, not guessed from any
+# doc — Garmin publishes no official API docs and the reverse-engineered
+# community lists disagree with each other and with this). "hiking" has no
+# dedicated Garmin sportType at all; "other" is the closest real fit.
 SPORT_TYPES: dict[str, dict[str, Any]] = {
     "strength": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "strength_training": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "mobility": {"sportTypeId": 11, "sportTypeKey": "mobility"},
-    "yoga": {"sportTypeId": 11, "sportTypeKey": "mobility"},
-    "conditioning": {"sportTypeId": 8, "sportTypeKey": "other"},
+    "yoga": {"sportTypeId": 7, "sportTypeKey": "yoga"},
+    "pilates": {"sportTypeId": 8, "sportTypeKey": "pilates"},
+    "conditioning": {"sportTypeId": 6, "sportTypeKey": "cardio_training"},
     "running": {"sportTypeId": 1, "sportTypeKey": "running"},
     "cycling": {"sportTypeId": 2, "sportTypeKey": "cycling"},
-    "swimming": {"sportTypeId": 3, "sportTypeKey": "swimming"},
-    "walking": {"sportTypeId": 4, "sportTypeKey": "walking"},
-    "hiking": {"sportTypeId": 7, "sportTypeKey": "hiking"},
-    "other": {"sportTypeId": 8, "sportTypeKey": "other"},
+    "swimming": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+    "walking": {"sportTypeId": 12, "sportTypeKey": "walking"},
+    "hiking": {"sportTypeId": 3, "sportTypeKey": "other"},
+    "hiit": {"sportTypeId": 9, "sportTypeKey": "hiit"},
+    "rucking": {"sportTypeId": 13, "sportTypeKey": "rucking"},
+    "other": {"sportTypeId": 3, "sportTypeKey": "other"},
 }
 
 # Kinds whose steps are real Garmin exercise-library movements (push-ups,
