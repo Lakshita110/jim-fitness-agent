@@ -63,6 +63,38 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/debug/env")
+def debug_env(request: Request) -> dict:
+    """TEMPORARY — diagnosing a live "CREDENTIAL_ENCRYPTION_KEY is not set"
+    failure on the Vercel deploy even after the variable was added/recreated
+    and the app redeployed. Reports only presence/length, never values, and
+    is gated behind a real session so it isn't public. Remove once resolved.
+    """
+    from jim.web import deps
+
+    deps._require_user(request)
+    s = settings()
+    key = s.credential_encryption_key
+    decoded_len = None
+    decode_error = None
+    if key:
+        import base64
+
+        try:
+            decoded_len = len(base64.b64decode(key))
+        except Exception as e:
+            decode_error = str(e)
+    return {
+        "credential_encryption_key_set": bool(key),
+        "credential_encryption_key_raw_len": len(key) if key else 0,
+        "credential_encryption_key_decoded_len": decoded_len,
+        "credential_encryption_key_decode_error": decode_error,
+        "database_url_set": bool(s.database_url),
+        "session_secret_set": bool(s.session_secret),
+        "cron_secret_set": bool(s.cron_secret),
+    }
+
+
 @app.get("/api/cron/nightly")
 def cron_nightly(request: Request) -> dict:
     """The nightly housekeeping run, invoked by Vercel Cron (schedule in vercel.json).
