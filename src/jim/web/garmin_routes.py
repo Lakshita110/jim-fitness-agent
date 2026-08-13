@@ -44,6 +44,24 @@ def _save_garmin_login(user_id: int, email: str, password: str, g: object) -> No
     )
 
 
+def _backfill_after_connect(user_id: int) -> None:
+    """First time this user has working Garmin creds: pull the trailing
+    ~90 days once so the coach has real history from night one, instead of
+    waiting ~90 days for the nightly sync_today to accumulate the same
+    window on its own. Runs synchronously in this request (a single user,
+    on a request the athlete is already waiting on) rather than in the
+    nightly cron fan-out, where one new signup's ~90 sequential Garmin
+    calls could blow the shared 60s budget for every other user syncing in
+    the same run. A Garmin hiccup here must not fail the connect itself —
+    the nightly job's own sync_today still runs regardless."""
+    from jim.jobs.nightly import _today_for_user, backfill_if_empty
+
+    try:
+        backfill_if_empty(user_id, _today_for_user(user_id))
+    except Exception:
+        log.warning("post-connect history backfill failed for user %s", user_id, exc_info=True)
+
+
 @router.get("/api/garmin/status")
 def garmin_status(request: Request) -> dict:
     """Whether this user already has a working Garmin connection, so the
@@ -106,6 +124,7 @@ def garmin_connect(body: GarminConnectBody, request: Request) -> dict:
             status_code=400,
             detail="couldn't save your Garmin connection — try again",
         ) from e
+    _backfill_after_connect(user.id)
     return {"ok": True}
 
 
@@ -139,4 +158,5 @@ def garmin_mfa(body: GarminMfaBody, request: Request) -> dict:
             status_code=400,
             detail="couldn't save your Garmin connection — try again",
         ) from e
+    _backfill_after_connect(user.id)
     return {"ok": True}

@@ -4,9 +4,13 @@ adaptations. It does NOT plan tomorrow; the athlete gets plan edits by talking
 to the coach (see coach.py), not from an unsolicited draft written overnight.
 
 A user with zero rows in garmin_daily (brand new signup) gets a one-time
-~90-day backfill first (see backfill_if_empty) so the coach has real history
-to reason over from night one, instead of waiting ~90 days for sync_today to
-accumulate the same window on its own.
+~90-day backfill (see backfill_if_empty) triggered from
+web/garmin_routes.py right when they connect Garmin — not from here. Doing
+it inside the nightly fan-out meant one new signup's ~90 sequential Garmin
+calls could blow the whole cron run's 60s Vercel budget for every other
+user sharing that invocation; running it once, synchronously, at connect
+time (a single user, a request the athlete is already waiting on) keeps it
+out of the shared budget entirely.
 
 This still has to run nightly because coach.py's fetch_state() reads
 query_history/readiness_read, which read the tables sync_today fills — without
@@ -213,12 +217,6 @@ def _run_nightly_for_user(user_id: int) -> dict:
     started = time.monotonic()
     ensure_migrated()
     today = _today_for_user(user_id)
-    try:
-        backfill_if_empty(user_id, today)
-    except Exception:
-        # First-run-only convenience — a Garmin hiccup here must not stop
-        # tonight's actual sync from happening.
-        log.warning("history backfill failed for user %s", user_id, exc_info=True)
     sync_today(user_id)
     try:
         cleanup_stale_adaptations(user_id, today)
