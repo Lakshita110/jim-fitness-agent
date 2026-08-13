@@ -23,7 +23,9 @@ from jim import auth, db
 from jim.app import mcp_app
 
 
-def _asgi_client(headers: dict[str, str] | None = None) -> Client:
+def _asgi_client(
+    headers: dict[str, str] | None = None, url: str = "http://testserver/mcp/"
+) -> Client:
     def factory(**kwargs):
         kwargs.pop("verify", None)
         return httpx.AsyncClient(
@@ -32,9 +34,7 @@ def _asgi_client(headers: dict[str, str] | None = None) -> Client:
             **kwargs,
         )
 
-    transport = StreamableHttpTransport(
-        "http://testserver/mcp/", headers=headers, httpx_client_factory=factory
-    )
+    transport = StreamableHttpTransport(url, headers=headers, httpx_client_factory=factory)
     return Client(transport)
 
 
@@ -44,12 +44,12 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
     async with mcp_app.lifespan(mcp_app):
         # No token at all.
         async with _asgi_client() as c:
-            with pytest.raises(ToolError, match="missing or malformed"):
+            with pytest.raises(ToolError, match="missing token"):
                 await c.call_tool("get_constraints", {})
 
-        # Header present but not a bearer token.
+        # Header present but not a bearer token, and no query-param fallback either.
         async with _asgi_client({"Authorization": "not-bearer x"}) as c:
-            with pytest.raises(ToolError, match="missing or malformed"):
+            with pytest.raises(ToolError, match="missing token"):
                 await c.call_tool("get_constraints", {})
 
         # Bearer scheme but a token that doesn't verify.
@@ -57,10 +57,21 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
             with pytest.raises(ToolError, match="invalid or expired"):
                 await c.call_tool("get_constraints", {})
 
-        # A valid token resolves to the matching user_id.
+        # ?token= with an invalid value is rejected the same way.
+        async with _asgi_client(url="http://testserver/mcp/?token=garbage") as c:
+            with pytest.raises(ToolError, match="invalid or expired"):
+                await c.call_tool("get_constraints", {})
+
+        # A valid token resolves to the matching user_id, via header...
         monkeypatch.setattr(db, "get_constraints", lambda uid: f"constraints for {uid}")
         token = auth.create_session_token(101)
         async with _asgi_client({"Authorization": f"Bearer {token}"}) as c:
+            result = await c.call_tool("get_constraints", {})
+            assert result.data == "constraints for 101"
+
+        # ...or, for clients that can't set headers (claude.ai's connector
+        # dialog), via a ?token= query param on the connector URL instead.
+        async with _asgi_client(url=f"http://testserver/mcp/?token={token}") as c:
             result = await c.call_tool("get_constraints", {})
             assert result.data == "constraints for 101"
 

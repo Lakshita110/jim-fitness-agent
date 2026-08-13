@@ -8,23 +8,26 @@ goals) that replaced the old playbook's template library. Named/reusable
 workouts now live in Garmin's own library, not a separate YAML store.
 
 Auth: no cookie jar here (this isn't a browser), so every tool call resolves
-its caller from `Authorization: Bearer <token>` — the same signed token
-`auth.py` already issues from /auth/login, read per-call via
-`get_http_headers()` rather than cached anywhere, and the server is mounted
-stateless (`stateless_http=True`) so each HTTP request is independent. Both
-choices are deliberate: FastMCP has a documented bug where a stateful
-StreamableHTTP session can leak a *stale* request's context into a later
-tool call on the same MCP session — unacceptable when two different people
-(different `user_id`s) are calling the same deployed server. Every tool
-re-resolves the caller fresh; nothing about identity is ever cached across
-calls. See tests/test_mcp_server.py for the isolation check this depends on.
+its caller from the same signed token `auth.py` already issues from
+/auth/login — as `Authorization: Bearer <token>` when the client can set
+headers, or `?token=<token>` on the connector URL when it can't (see
+`_token_from_request`; claude.ai's own connector UI is the latter case).
+Read per-call via `get_http_headers()`/`get_http_request()` rather than
+cached anywhere, and the server is mounted stateless (`stateless_http=True`)
+so each HTTP request is independent. Both choices are deliberate: FastMCP
+has a documented bug where a stateful StreamableHTTP session can leak a
+*stale* request's context into a later tool call on the same MCP session —
+unacceptable when two different people (different `user_id`s) are calling
+the same deployed server. Every tool re-resolves the caller fresh; nothing
+about identity is ever cached across calls. See tests/test_mcp_server.py
+for the isolation check this depends on.
 """
 
 from datetime import date
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.dependencies import get_http_headers, get_http_request
 from pydantic import BaseModel
 
 from jim import auth, db
@@ -33,15 +36,35 @@ from jim.schemas import ExerciseStep, StructuredSession
 mcp = FastMCP("jim-garmin")
 
 
-def _current_user_id() -> int:
-    """Resolve the caller from the bearer token on *this* request. Never
-    cached — see the module docstring for why that matters here."""
+def _token_from_request() -> str:
+    """`Authorization: Bearer <token>` if present, else a `?token=` query
+    param on the connector URL.
+
+    The header is the correct transport, but claude.ai's own "Add custom
+    connector" dialog only exposes OAuth Client ID/Secret fields — there is
+    no way to set a request header from that UI (confirmed via
+    anthropics/claude-ai-mcp#112 and #411, not a gap in our setup). The URL
+    field is freely editable, so the query param is the practical fallback
+    for that specific client; both paths resolve through the same
+    `auth.verify_session_token`, so neither is treated as more trusted."""
     # get_http_headers() strips Authorization by default (it's meant for
     # safely forwarding headers downstream) — has to be opted back in.
     header = get_http_headers(include={"authorization"}).get("authorization", "")
     scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise ToolError("missing or malformed Authorization: Bearer <token> header")
+    if scheme.lower() == "bearer" and token:
+        return token
+    return get_http_request().query_params.get("token", "")
+
+
+def _current_user_id() -> int:
+    """Resolve the caller from the bearer token on *this* request. Never
+    cached — see the module docstring for why that matters here."""
+    token = _token_from_request()
+    if not token:
+        raise ToolError(
+            "missing token — pass Authorization: Bearer <token>, or ?token=<token>"
+            " on the connector URL if your client can't set headers"
+        )
     user_id = auth.verify_session_token(token)
     if user_id is None:
         raise ToolError("invalid or expired token — sign in again to mint a new one")
