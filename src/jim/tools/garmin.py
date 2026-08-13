@@ -170,11 +170,11 @@ def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
     nightly cron's shared 60s Vercel budget for every other user in the same
     run, which is why this never runs from there.
 
-    Idempotent (upserts/ON CONFLICT DO NOTHING throughout, plus the
-    already-has-history check up front), so it's safe if two callers happen
-    to race for the same user."""
+    Gated on already having *any* history, which misses the case of an
+    account that connected Garmin before this existed and only has a few
+    days synced — use backfill_history directly (mcp_server.backfill_history
+    tool) to force a re-pull regardless of what's already there."""
     from jim.db import connect
-    from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets
 
     with connect() as conn:
         already_has_history = conn.execute(
@@ -182,8 +182,19 @@ def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
         ).fetchone()
     if already_has_history:
         return
+    backfill_history(user_id, today, days)
 
-    log.info("no history yet for user %s — backfilling %d days", user_id, days)
+
+def backfill_history(user_id: int, today: date, days: int = 90) -> None:
+    """Unconditionally pull the trailing `days` of Garmin history into
+    Postgres (upserts throughout, so safe to re-run / overlap). This is the
+    actual work backfill_if_empty gates; call it directly to force a re-pull
+    for an account that already has some history but not the full window
+    (e.g. connected before backfill_if_empty existed)."""
+    from jim.db import connect
+    from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets
+
+    log.info("backfilling %d days for user %s", days, user_id)
     for offset in range(days, -1, -1):
         day = today - timedelta(days=offset)
         snapshot = get_garmin_today(user_id, day)

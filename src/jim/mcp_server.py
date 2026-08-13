@@ -262,6 +262,25 @@ def delete_workout(workout_id: str) -> dict:
 
 
 @mcp.tool
+def backfill_history(days: int = 90) -> dict:
+    """Force a re-pull of the trailing `days` of Garmin history (daily
+    metrics, activities, exercise sets) into Jim's database, even if some
+    history already exists. Every other read tool auto-backfills once on an
+    account's first-ever call, but only when it has zero history — an
+    account that connected Garmin before that existed (or only ever synced
+    a few days) won't get topped up automatically. Call this on an explicit
+    ask like "backfill my history" or "pull in my past workouts." Runs
+    synchronously and does ~90 sequential Garmin calls, so it can take a
+    couple of minutes — say so before calling it."""
+    from jim.jobs.nightly import _today_for_user
+    from jim.tools.garmin import backfill_history as _backfill
+
+    user_id = _current_user_id()
+    _backfill(user_id, _today_for_user(user_id), days)
+    return {"ok": True}
+
+
+@mcp.tool
 def cleanup_old_adapted_workouts(lookback_days: int = 30) -> dict:
     """Delete past one-off workouts this server created (titled "Jim · ...")
     so they don't accumulate in the athlete's Garmin library/watch app. Runs
