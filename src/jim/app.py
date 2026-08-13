@@ -63,56 +63,6 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/debug/env")
-def debug_env(request: Request) -> dict:
-    """TEMPORARY — diagnosing a live "CREDENTIAL_ENCRYPTION_KEY is not set"
-    failure on the Vercel deploy even after the variable was added/recreated
-    and the app redeployed. Reports only presence/length, never values, and
-    is gated behind a real session so it isn't public. Remove once resolved.
-    """
-    from jim.web import deps
-
-    deps._require_user(request)
-    s = settings()
-    key = s.credential_encryption_key
-    decoded_len = None
-    decode_error = None
-    if key:
-        import base64
-
-        try:
-            decoded_len = len(base64.b64decode(key))
-        except Exception as e:
-            decode_error = str(e)
-    from jim.db import connect
-
-    with connect() as conn:
-        pk_cols = conn.execute(
-            "SELECT a.attname FROM pg_index i"
-            " JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)"
-            " WHERE i.indrelid = 'kv'::regclass AND i.indisprimary"
-            " ORDER BY a.attnum"
-        ).fetchall()
-        null_user_id_counts = {}
-        for table in ("kv", "garmin_daily", "garmin_activities", "exercise_sets"):
-            row = conn.execute(
-                f"SELECT count(*) AS n FROM {table} WHERE user_id IS NULL"
-            ).fetchone()
-            null_user_id_counts[table] = row["n"]
-
-    return {
-        "credential_encryption_key_set": bool(key),
-        "credential_encryption_key_raw_len": len(key) if key else 0,
-        "credential_encryption_key_decoded_len": decoded_len,
-        "credential_encryption_key_decode_error": decode_error,
-        "database_url_set": bool(s.database_url),
-        "session_secret_set": bool(s.session_secret),
-        "cron_secret_set": bool(s.cron_secret),
-        "kv_primary_key_columns": [r["attname"] for r in pk_cols],
-        "null_user_id_row_counts": null_user_id_counts,
-    }
-
-
 @app.get("/api/cron/nightly")
 def cron_nightly(request: Request) -> dict:
     """The nightly housekeeping run, invoked by Vercel Cron (schedule in vercel.json).
