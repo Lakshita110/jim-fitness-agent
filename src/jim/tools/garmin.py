@@ -33,6 +33,13 @@ TOKEN_STORE = "~/.garminconnect"
 # filesystem path. Anything shorter than this is a mangled blob, not a session.
 MIN_TOKEN_BLOB_CHARS = 512
 
+# Prefix every one-off workout mcp_server.create_or_update_workout creates,
+# so jobs/nightly.py can tell "a Claude adaptation for one day" apart from a
+# real named workout in the athlete's library (Full Body A, PT Day, ...)
+# purely by reading Garmin's own data — no separate Jim-side tracking table,
+# since Garmin is the source of truth for what it's holding.
+ADAPTED_WORKOUT_PREFIX = "Jim · "
+
 
 def client(user_id: int) -> Any:
     """Lazily authenticated Garmin client for `user_id` (cached per process,

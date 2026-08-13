@@ -84,6 +84,22 @@ def debug_env(request: Request) -> dict:
             decoded_len = len(base64.b64decode(key))
         except Exception as e:
             decode_error = str(e)
+    from jim.db import connect
+
+    with connect() as conn:
+        pk_cols = conn.execute(
+            "SELECT a.attname FROM pg_index i"
+            " JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)"
+            " WHERE i.indrelid = 'kv'::regclass AND i.indisprimary"
+            " ORDER BY a.attnum"
+        ).fetchall()
+        null_user_id_counts = {}
+        for table in ("kv", "garmin_daily", "garmin_activities", "exercise_sets"):
+            row = conn.execute(
+                f"SELECT count(*) AS n FROM {table} WHERE user_id IS NULL"
+            ).fetchone()
+            null_user_id_counts[table] = row["n"]
+
     return {
         "credential_encryption_key_set": bool(key),
         "credential_encryption_key_raw_len": len(key) if key else 0,
@@ -92,6 +108,8 @@ def debug_env(request: Request) -> dict:
         "database_url_set": bool(s.database_url),
         "session_secret_set": bool(s.session_secret),
         "cron_secret_set": bool(s.cron_secret),
+        "kv_primary_key_columns": [r["attname"] for r in pk_cols],
+        "null_user_id_row_counts": null_user_id_counts,
     }
 
 

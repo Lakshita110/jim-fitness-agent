@@ -31,7 +31,36 @@ from fastmcp.server.dependencies import get_http_headers, get_http_request
 from pydantic import BaseModel
 
 from jim import auth, db
-from jim.schemas import ExerciseStep, StructuredSession
+from jim.schemas import ExerciseStep, SessionKind, StructuredSession
+from jim.tools.garmin import ADAPTED_WORKOUT_PREFIX
+
+# Claude reasonably reaches for Garmin's own vocabulary (it just read it from
+# get_scheduled_workouts/list_saved_workouts, which report sportType keys
+# like "strength_training") rather than the narrower set StructuredSession
+# actually accepts — normalize instead of a raw pydantic 422 that gives no
+# indication of what to try next.
+_KIND_ALIASES: dict[str, SessionKind] = {
+    "strength_training": "strength",
+    "fitness_equipment": "strength",
+    "cardio": "conditioning",
+    "running": "conditioning",
+    "cycling": "conditioning",
+    "yoga": "mobility",
+    "pilates": "mobility",
+    "stretching": "mobility",
+}
+
+
+def _normalize_kind(kind: str) -> SessionKind:
+    if kind in ("strength", "conditioning", "mobility", "rest"):
+        return kind  # type: ignore[return-value]
+    normalized = _KIND_ALIASES.get(kind.strip().lower())
+    if normalized is None:
+        raise ToolError(
+            f"unrecognized kind {kind!r} — use one of strength, conditioning,"
+            " mobility, rest"
+        )
+    return normalized
 
 mcp = FastMCP("jim-garmin")
 
@@ -151,14 +180,27 @@ def create_or_update_workout(
     reps or duration_sec, weight_kg) and return its `workout_id`. Garmin has
     no in-place edit for structured workouts — to "update" one, create a new
     version and `schedule_workout` it in place of the old (re-scheduling a
-    day replaces what was there, it doesn't duplicate)."""
+    day replaces what was there, it doesn't duplicate).
+
+    `kind` is one of: strength, conditioning, mobility, rest — not Garmin's
+    own sportType vocabulary (e.g. "strength_training"), which get_scheduled_
+    workouts/list_saved_workouts report; common Garmin values are mapped
+    automatically, but prefer the four above.
+
+    The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
+    distinguishable from the athlete's real saved workouts (Full Body A,
+    PT Day, etc.) and gets swept automatically once its date has passed —
+    see jobs/nightly.py's cleanup_adapted_workouts. Don't use this for a
+    workout meant to stick around in the athlete's library; that's a
+    library edit on Garmin itself (create_or_update_workout is for a
+    single day's session, not a template)."""
     from jim.tools.garmin import create_garmin_workout
 
     user_id = _current_user_id()
     session = StructuredSession(
         for_date=date.fromisoformat(for_date),
-        kind=kind,  # type: ignore[arg-type]
-        title=title,
+        kind=_normalize_kind(kind),
+        title=f"{ADAPTED_WORKOUT_PREFIX}{title}",
         steps=[ExerciseStep(**s.model_dump()) for s in steps],
     )
     ref = create_garmin_workout(user_id, session)
@@ -194,6 +236,21 @@ def delete_workout(workout_id: str) -> dict:
     from jim.tools.garmin import delete_garmin_workout
 
     delete_garmin_workout(_current_user_id(), workout_id)
+    return {"ok": True}
+
+
+@mcp.tool
+def cleanup_old_adapted_workouts(lookback_days: int = 30) -> dict:
+    """Delete past one-off workouts this server created (titled "Jim · ...")
+    so they don't accumulate in the athlete's Garmin library/watch app. Runs
+    automatically every night, but call this directly if asked to "clean up"
+    or "tidy up" now rather than waiting for the nightly run. Only touches
+    workouts on or before yesterday; today's and future scheduled days are
+    never swept."""
+    from jim.jobs.nightly import _today_for_user, cleanup_adapted_workouts
+
+    user_id = _current_user_id()
+    cleanup_adapted_workouts(user_id, _today_for_user(user_id), lookback_days)
     return {"ok": True}
 
 

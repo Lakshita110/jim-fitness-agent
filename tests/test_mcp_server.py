@@ -19,6 +19,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
 import jim.app as app_mod
+import jim.mcp_server as mcp_server_mod
 from jim import auth, db
 from jim.app import mcp_app
 
@@ -98,3 +99,30 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
             write_result = await c.call_tool("set_constraints", {"content": "no jump squats"})
         assert write_result.data == {"ok": True}
         assert writes == [(303, "no jump squats")]
+
+
+def test_normalize_kind_passes_through_the_real_values():
+    for kind in ("strength", "conditioning", "mobility", "rest"):
+        assert mcp_server_mod._normalize_kind(kind) == kind
+
+
+def test_normalize_kind_maps_garmin_and_common_vocabulary():
+    """The bug that actually happened: Claude read "strength_training" off
+    get_scheduled_workouts/list_saved_workouts (Garmin's own sportType key)
+    and passed it straight through, which used to blow up as a raw pydantic
+    422 with no indication of what to try instead."""
+    assert mcp_server_mod._normalize_kind("strength_training") == "strength"
+    assert mcp_server_mod._normalize_kind("fitness_equipment") == "strength"
+    assert mcp_server_mod._normalize_kind("cardio") == "conditioning"
+    assert mcp_server_mod._normalize_kind("running") == "conditioning"
+    assert mcp_server_mod._normalize_kind("cycling") == "conditioning"
+    assert mcp_server_mod._normalize_kind("yoga") == "mobility"
+    assert mcp_server_mod._normalize_kind("pilates") == "mobility"
+    assert mcp_server_mod._normalize_kind("stretching") == "mobility"
+    # Case/whitespace tolerant, since a model won't always match exactly.
+    assert mcp_server_mod._normalize_kind("  Cardio ") == "conditioning"
+
+
+def test_normalize_kind_rejects_unknown_values_with_a_clear_message():
+    with pytest.raises(ToolError, match="unrecognized kind"):
+        mcp_server_mod._normalize_kind("interpretive dance")
