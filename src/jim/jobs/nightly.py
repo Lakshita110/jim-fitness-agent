@@ -3,6 +3,11 @@ Postgres, reconcile today's adherence, and sweep stale one-off Garmin
 adaptations. It does NOT plan tomorrow; the athlete gets plan edits by talking
 to the coach (see coach.py), not from an unsolicited draft written overnight.
 
+A user with zero rows in garmin_daily (brand new signup) gets a one-time
+~90-day backfill first (see backfill_if_empty) so the coach has real history
+to reason over from night one, instead of waiting ~90 days for sync_today to
+accumulate the same window on its own.
+
 This still has to run nightly because coach.py's fetch_state() reads
 query_history/readiness_read, which read the tables sync_today fills — without
 this job, readiness/volume features and adherence tracking go stale.
@@ -89,6 +94,60 @@ def sync_today(user_id: int) -> None:
         conn.commit()
 
 
+def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
+    """First-ever run for this user: garmin_daily has zero rows, so
+    query_history/readiness_read would have nothing to work with even after
+    tonight's sync_today (which only ever writes *today*). Pull the trailing
+    `days` of history once, the same way scripts/backfill.py does by hand —
+    this just makes that step automatic instead of something the operator
+    has to remember to run per new signup. Idempotent (upserts/ON CONFLICT
+    DO NOTHING throughout), so it's safe even if two nightly runs somehow
+    overlap for the same user."""
+    from jim.tools.garmin import get_exercise_sets, get_garmin_today
+
+    with connect() as conn:
+        already_has_history = conn.execute(
+            "SELECT 1 FROM garmin_daily WHERE user_id = %s LIMIT 1", (user_id,)
+        ).fetchone()
+    if already_has_history:
+        return
+
+    log.info("no history yet for user %s — backfilling %d days", user_id, days)
+    for offset in range(days, -1, -1):
+        day = today - timedelta(days=offset)
+        snapshot = get_garmin_today(user_id, day)
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO garmin_daily (user_id, day, hrv, sleep_hours, body_battery,"
+                " readiness, resting_hr, raw) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (user_id, day) DO UPDATE SET hrv=EXCLUDED.hrv,"
+                " sleep_hours=EXCLUDED.sleep_hours, body_battery=EXCLUDED.body_battery,"
+                " readiness=EXCLUDED.readiness, resting_hr=EXCLUDED.resting_hr,"
+                " raw=EXCLUDED.raw",
+                (user_id, day, snapshot.hrv, snapshot.sleep_hours, snapshot.body_battery,
+                 snapshot.readiness, snapshot.resting_hr, snapshot.model_dump_json()),
+            )
+            for act in snapshot.activities:
+                conn.execute(
+                    "INSERT INTO garmin_activities (user_id, activity_id, day, type,"
+                    " duration_min, training_load, summary)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                    " ON CONFLICT (user_id, activity_id) DO NOTHING",
+                    (user_id, act.activity_id, day, act.type, act.duration_min,
+                     act.training_load, act.model_dump_json()),
+                )
+                if act.type in STRENGTH_TYPES:
+                    try:
+                        store_exercise_sets(
+                            conn, user_id, act.activity_id, day,
+                            get_exercise_sets(user_id, act.activity_id),
+                        )
+                    except Exception:
+                        log.exception("sets fetch failed for %s", act.activity_id)
+            conn.commit()
+    log.info("backfill done for user %s", user_id)
+
+
 def cleanup_stale_adaptations(user_id: int, today: date) -> None:
     """Delete one-off Garmin workouts (built for a single adapted day, never
     promoted into the playbook) whose day has already passed — see the
@@ -153,8 +212,14 @@ def _run_nightly_for_user(user_id: int) -> dict:
 
     started = time.monotonic()
     ensure_migrated()
-    sync_today(user_id)
     today = _today_for_user(user_id)
+    try:
+        backfill_if_empty(user_id, today)
+    except Exception:
+        # First-run-only convenience — a Garmin hiccup here must not stop
+        # tonight's actual sync from happening.
+        log.warning("history backfill failed for user %s", user_id, exc_info=True)
+    sync_today(user_id)
     try:
         cleanup_stale_adaptations(user_id, today)
     except Exception:
