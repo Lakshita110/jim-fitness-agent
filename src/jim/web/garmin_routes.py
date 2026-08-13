@@ -54,7 +54,8 @@ def _backfill_after_connect(user_id: int) -> None:
     calls could blow the shared 60s budget for every other user syncing in
     the same run. A Garmin hiccup here must not fail the connect itself —
     the nightly job's own sync_today still runs regardless."""
-    from jim.jobs.nightly import _today_for_user, backfill_if_empty
+    from jim.jobs.nightly import _today_for_user
+    from jim.tools.garmin import backfill_if_empty
 
     try:
         backfill_if_empty(user_id, _today_for_user(user_id))

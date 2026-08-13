@@ -12,7 +12,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable, Mapping
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -152,6 +152,71 @@ def get_garmin_today(user_id: int, day: date) -> GarminToday:
         readiness=stats.get("trainingReadinessScore"),
         resting_hr=stats.get("restingHeartRate"),
     )
+
+
+def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
+    """First-ever real Garmin data for this user: garmin_daily has zero
+    rows, so query_history/readiness_read would have nothing to work with
+    even after today's own sync. Pull the trailing `days` of history once,
+    the same way scripts/backfill.py does by hand — this just makes that
+    step automatic instead of something the operator has to remember to run
+    per new signup.
+
+    Called from two places, not the nightly cron fan-out: web/garmin_routes.py
+    right after a Garmin connect/MFA succeeds (a single user, on a request
+    the athlete is already waiting on), and mcp_server.py's read tools as a
+    second safety net for any account that got its Garmin credentials
+    another way. ~90 sequential Garmin calls per new signup would blow the
+    nightly cron's shared 60s Vercel budget for every other user in the same
+    run, which is why this never runs from there.
+
+    Idempotent (upserts/ON CONFLICT DO NOTHING throughout, plus the
+    already-has-history check up front), so it's safe if two callers happen
+    to race for the same user."""
+    from jim.db import connect
+    from jim.jobs.nightly import STRENGTH_TYPES, store_exercise_sets
+
+    with connect() as conn:
+        already_has_history = conn.execute(
+            "SELECT 1 FROM garmin_daily WHERE user_id = %s LIMIT 1", (user_id,)
+        ).fetchone()
+    if already_has_history:
+        return
+
+    log.info("no history yet for user %s — backfilling %d days", user_id, days)
+    for offset in range(days, -1, -1):
+        day = today - timedelta(days=offset)
+        snapshot = get_garmin_today(user_id, day)
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO garmin_daily (user_id, day, hrv, sleep_hours, body_battery,"
+                " readiness, resting_hr, raw) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " ON CONFLICT (user_id, day) DO UPDATE SET hrv=EXCLUDED.hrv,"
+                " sleep_hours=EXCLUDED.sleep_hours, body_battery=EXCLUDED.body_battery,"
+                " readiness=EXCLUDED.readiness, resting_hr=EXCLUDED.resting_hr,"
+                " raw=EXCLUDED.raw",
+                (user_id, day, snapshot.hrv, snapshot.sleep_hours, snapshot.body_battery,
+                 snapshot.readiness, snapshot.resting_hr, snapshot.model_dump_json()),
+            )
+            for act in snapshot.activities:
+                conn.execute(
+                    "INSERT INTO garmin_activities (user_id, activity_id, day, type,"
+                    " duration_min, training_load, summary)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                    " ON CONFLICT (user_id, activity_id) DO NOTHING",
+                    (user_id, act.activity_id, day, act.type, act.duration_min,
+                     act.training_load, act.model_dump_json()),
+                )
+                if act.type in STRENGTH_TYPES:
+                    try:
+                        store_exercise_sets(
+                            conn, user_id, act.activity_id, day,
+                            get_exercise_sets(user_id, act.activity_id),
+                        )
+                    except Exception:
+                        log.exception("sets fetch failed for %s", act.activity_id)
+            conn.commit()
+    log.info("backfill done for user %s", user_id)
 
 
 # --- matching a movement to Garmin's exercise taxonomy ------------------------

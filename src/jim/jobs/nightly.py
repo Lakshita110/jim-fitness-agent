@@ -4,13 +4,12 @@ adaptations. It does NOT plan tomorrow; the athlete gets plan edits by talking
 to the coach (see coach.py), not from an unsolicited draft written overnight.
 
 A user with zero rows in garmin_daily (brand new signup) gets a one-time
-~90-day backfill (see backfill_if_empty) triggered from
-web/garmin_routes.py right when they connect Garmin — not from here. Doing
-it inside the nightly fan-out meant one new signup's ~90 sequential Garmin
-calls could blow the whole cron run's 60s Vercel budget for every other
-user sharing that invocation; running it once, synchronously, at connect
-time (a single user, a request the athlete is already waiting on) keeps it
-out of the shared budget entirely.
+~90-day backfill — see tools/garmin.backfill_if_empty, triggered from
+web/garmin_routes.py right when they connect Garmin, and again from
+mcp_server.py's read tools as a second safety net. Not from here: one new
+signup's ~90 sequential Garmin calls could blow the whole cron run's 60s
+Vercel budget for every other user sharing that invocation, so it
+deliberately lives outside this module.
 
 This still has to run nightly because coach.py's fetch_state() reads
 query_history/readiness_read, which read the tables sync_today fills — without
@@ -96,60 +95,6 @@ def sync_today(user_id: int) -> None:
                 except Exception:
                     log.exception("exercise sets fetch failed for %s", act.activity_id)
         conn.commit()
-
-
-def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
-    """First-ever run for this user: garmin_daily has zero rows, so
-    query_history/readiness_read would have nothing to work with even after
-    tonight's sync_today (which only ever writes *today*). Pull the trailing
-    `days` of history once, the same way scripts/backfill.py does by hand —
-    this just makes that step automatic instead of something the operator
-    has to remember to run per new signup. Idempotent (upserts/ON CONFLICT
-    DO NOTHING throughout), so it's safe even if two nightly runs somehow
-    overlap for the same user."""
-    from jim.tools.garmin import get_exercise_sets, get_garmin_today
-
-    with connect() as conn:
-        already_has_history = conn.execute(
-            "SELECT 1 FROM garmin_daily WHERE user_id = %s LIMIT 1", (user_id,)
-        ).fetchone()
-    if already_has_history:
-        return
-
-    log.info("no history yet for user %s — backfilling %d days", user_id, days)
-    for offset in range(days, -1, -1):
-        day = today - timedelta(days=offset)
-        snapshot = get_garmin_today(user_id, day)
-        with connect() as conn:
-            conn.execute(
-                "INSERT INTO garmin_daily (user_id, day, hrv, sleep_hours, body_battery,"
-                " readiness, resting_hr, raw) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-                " ON CONFLICT (user_id, day) DO UPDATE SET hrv=EXCLUDED.hrv,"
-                " sleep_hours=EXCLUDED.sleep_hours, body_battery=EXCLUDED.body_battery,"
-                " readiness=EXCLUDED.readiness, resting_hr=EXCLUDED.resting_hr,"
-                " raw=EXCLUDED.raw",
-                (user_id, day, snapshot.hrv, snapshot.sleep_hours, snapshot.body_battery,
-                 snapshot.readiness, snapshot.resting_hr, snapshot.model_dump_json()),
-            )
-            for act in snapshot.activities:
-                conn.execute(
-                    "INSERT INTO garmin_activities (user_id, activity_id, day, type,"
-                    " duration_min, training_load, summary)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s)"
-                    " ON CONFLICT (user_id, activity_id) DO NOTHING",
-                    (user_id, act.activity_id, day, act.type, act.duration_min,
-                     act.training_load, act.model_dump_json()),
-                )
-                if act.type in STRENGTH_TYPES:
-                    try:
-                        store_exercise_sets(
-                            conn, user_id, act.activity_id, day,
-                            get_exercise_sets(user_id, act.activity_id),
-                        )
-                    except Exception:
-                        log.exception("sets fetch failed for %s", act.activity_id)
-            conn.commit()
-    log.info("backfill done for user %s", user_id)
 
 
 def cleanup_stale_adaptations(user_id: int, today: date) -> None:

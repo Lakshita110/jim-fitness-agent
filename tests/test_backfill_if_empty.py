@@ -1,4 +1,4 @@
-"""backfill_if_empty (jobs/nightly.py): a brand-new signup has zero rows in
+"""backfill_if_empty (tools/garmin.py): a brand-new signup has zero rows in
 garmin_daily, so tonight's sync_today alone would leave the coach with only
 today's data. This checks the emptiness gate and the skip path; the actual
 day-by-day Garmin pull is exercised well enough by scripts/backfill.py's own
@@ -7,7 +7,7 @@ gate itself rather than re-testing Garmin fetch plumbing."""
 
 from datetime import date
 
-import jim.jobs.nightly as nightly_mod
+import jim.tools.garmin as garmin_mod
 
 
 class FakeCursor:
@@ -44,7 +44,7 @@ class FakeConn:
 
 def test_skips_backfill_when_history_already_exists(monkeypatch):
     conn = FakeConn(has_history=True)
-    monkeypatch.setattr(nightly_mod, "connect", lambda: conn)
+    monkeypatch.setattr("jim.db.connect", lambda: conn)
 
     called = False
 
@@ -52,9 +52,9 @@ def test_skips_backfill_when_history_already_exists(monkeypatch):
         nonlocal called
         called = True
 
-    monkeypatch.setattr("jim.tools.garmin.get_garmin_today", fake_get_garmin_today)
+    monkeypatch.setattr(garmin_mod, "get_garmin_today", fake_get_garmin_today)
 
-    nightly_mod.backfill_if_empty(1, date(2026, 8, 13), days=90)
+    garmin_mod.backfill_if_empty(1, date(2026, 8, 13), days=90)
 
     assert called is False
     assert any(s.startswith("SELECT 1 FROM garmin_daily") for s in conn.executed)
@@ -62,7 +62,7 @@ def test_skips_backfill_when_history_already_exists(monkeypatch):
 
 def test_backfills_the_full_window_when_no_history_exists(monkeypatch):
     conn = FakeConn(has_history=False)
-    monkeypatch.setattr(nightly_mod, "connect", lambda: conn)
+    monkeypatch.setattr("jim.db.connect", lambda: conn)
 
     fetched_days = []
 
@@ -81,9 +81,9 @@ def test_backfills_the_full_window_when_no_history_exists(monkeypatch):
         fetched_days.append(day)
         return FakeSnapshot()
 
-    monkeypatch.setattr("jim.tools.garmin.get_garmin_today", fake_get_garmin_today)
+    monkeypatch.setattr(garmin_mod, "get_garmin_today", fake_get_garmin_today)
 
-    nightly_mod.backfill_if_empty(1, date(2026, 8, 13), days=5)
+    garmin_mod.backfill_if_empty(1, date(2026, 8, 13), days=5)
 
     # days=5 means offsets 5..0 inclusive -> 6 days pulled.
     assert len(fetched_days) == 6

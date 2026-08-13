@@ -104,10 +104,11 @@ def _current_user_id() -> int:
 def _ensure_history(user_id: int) -> None:
     """First real read for a user with zero garmin_daily rows triggers the
     same 90-day pull the nightly cron would eventually do on its own — see
-    jobs/nightly.backfill_if_empty. Called from the read tools rather than
+    tools.garmin.backfill_if_empty. Called from the read tools rather than
     _current_user_id() itself so a write-only call (e.g. set_constraints)
     doesn't pay for it; every read tool needs the history anyway."""
-    from jim.jobs.nightly import _today_for_user, backfill_if_empty
+    from jim.jobs.nightly import _today_for_user
+    from jim.tools.garmin import backfill_if_empty
 
     try:
         backfill_if_empty(user_id, _today_for_user(user_id))
