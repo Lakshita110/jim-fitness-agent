@@ -101,6 +101,22 @@ def _current_user_id() -> int:
     return user_id
 
 
+def _ensure_history(user_id: int) -> None:
+    """First real read for a user with zero garmin_daily rows triggers the
+    same 90-day pull the nightly cron would eventually do on its own — see
+    jobs/nightly.backfill_if_empty. Called from the read tools rather than
+    _current_user_id() itself so a write-only call (e.g. set_constraints)
+    doesn't pay for it; every read tool needs the history anyway."""
+    from jim.jobs.nightly import _today_for_user, backfill_if_empty
+
+    try:
+        backfill_if_empty(user_id, _today_for_user(user_id))
+    except Exception:
+        # Best-effort — a Garmin hiccup here must not block the read the
+        # athlete actually asked for.
+        pass
+
+
 class StepIn(BaseModel):
     exercise: str
     sets: int = 1
@@ -119,6 +135,7 @@ def get_readiness(as_of: str | None = None) -> dict:
     from jim.tools.history import readiness_read
 
     user_id = _current_user_id()
+    _ensure_history(user_id)
     day = date.fromisoformat(as_of) if as_of else date.today()
     return readiness_read(user_id, day).model_dump(mode="json")
 
@@ -129,7 +146,9 @@ def get_exercise_history(exercise: str, days: int = 180) -> str:
     per session) — fuzzy-matched against logged Garmin sets."""
     from jim.tools.history import exercise_history
 
-    return exercise_history(_current_user_id(), exercise, days=days)
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    return exercise_history(user_id, exercise, days=days)
 
 
 @mcp.tool
@@ -137,7 +156,9 @@ def get_recent_activities(days: int = 14) -> str:
     """Recent Garmin activities (type, duration) for the trailing window."""
     from jim.tools.history import workout_history
 
-    return workout_history(_current_user_id(), days=days)
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    return workout_history(user_id, days=days)
 
 
 @mcp.tool
