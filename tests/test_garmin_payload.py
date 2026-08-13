@@ -7,14 +7,44 @@ from jim.schemas import ExerciseStep, StructuredSession
 from jim.tools.garmin import build_strength_payload, classify_garmin_exercise
 
 
-def session(steps: list[ExerciseStep]) -> StructuredSession:
+def session(steps: list[ExerciseStep], kind: str = "strength") -> StructuredSession:
     return StructuredSession(
         for_date=date(2026, 7, 8),
-        kind="strength",
+        kind=kind,
         title="Test session",
         steps=steps,
         est_duration_min=30,
     )
+
+
+def test_conditioning_session_is_not_silently_tagged_strength():
+    """Real bug: build_strength_payload used to hardcode sport_key="strength"
+    regardless of session.kind, so a conditioning (walk/run/ride) session
+    Claude asked for always got scheduled on Garmin as strength_training."""
+    payload = build_strength_payload(session([ExerciseStep(exercise="Walk", duration_sec=1800)],
+                                              kind="conditioning"))
+    assert payload["sportType"]["sportTypeKey"] != "strength_training"
+
+
+def test_conditioning_step_skips_strength_exercise_classification():
+    """A walk isn't a movement in Garmin's strength exercise taxonomy —
+    forcing it through classify_garmin_exercise attaches a wrong or empty
+    category/exerciseName, which can get the step rejected. Conditioning
+    steps should go out as plain description-only steps instead."""
+    payload = build_strength_payload(session([ExerciseStep(exercise="Walk", duration_sec=1800)],
+                                              kind="conditioning"))
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["description"] == "Walk"
+    assert "category" not in step
+    assert "exerciseName" not in step
+
+
+def test_strength_session_still_gets_classified():
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Goblet squat", sets=1, reps=8)])
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert "category" in step
 
 
 def test_multi_set_step_becomes_repeat_group():

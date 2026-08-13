@@ -488,12 +488,21 @@ def _emit_step(
     time_sec: int | None,
     weight_kg: float | None,
     classified: Mapping[str, tuple[str | None, str | None]] | None = None,
+    classify: bool = True,
 ) -> tuple[list[dict[str, Any]], int]:
     """Build one executable step (wrapped in a RepeatGroupDTO when sets>1),
     encoding the hard-won Garmin quirks (see docs/garmin_strength.md).
 
     Condition type IDs: 2 = time, 7 = iterations, 10 = reps — numeric id is
-    mandatory; the value goes in step-level endConditionValue."""
+    mandatory; the value goes in step-level endConditionValue.
+
+    `classify=False` skips matching `name` against Garmin's strength exercise
+    taxonomy (category/exerciseName) — that taxonomy is push-ups/squats/etc,
+    and forcing something like "Walk" through it produces a wrong or empty
+    match that can get the whole step rejected. Conditioning sessions (walks,
+    runs, rides — activities, not exercises) pass classify=False and rely on
+    the plain `description` instead; strength/mobility sessions still get
+    classified since their steps really are Garmin exercise-library moves."""
     if reps:
         end_condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
         end_value: float = reps
@@ -512,11 +521,12 @@ def _emit_step(
     if weight_kg is not None:
         entry["weightValue"] = weight_kg
         entry["weightUnit"] = {"unitKey": "kilogram"}
-    category, exercise_name = (classified or {}).get(name) or classify_garmin_exercise(name)
-    if category:
-        entry["category"] = category
-    if exercise_name:
-        entry["exerciseName"] = exercise_name
+    if classify:
+        category, exercise_name = (classified or {}).get(name) or classify_garmin_exercise(name)
+        if category:
+            entry["category"] = category
+        if exercise_name:
+            entry["exerciseName"] = exercise_name
 
     if sets > 1:
         group = {
@@ -581,8 +591,15 @@ def get_exercise_sets(user_id: int, activity_id: str) -> list[dict[str, Any]]:
 def build_strength_payload(
     session: StructuredSession, resolver: "Resolver | None" = None
 ) -> dict[str, Any]:
-    """Garmin workout-API JSON for a composed session (verified schema)."""
-    classified = classify_all([s.exercise for s in session.steps], resolver)
+    """Garmin workout-API JSON for a composed session (verified schema).
+
+    `session.kind` drives both the sportType tag and whether steps get
+    matched against Garmin's strength exercise taxonomy — a conditioning
+    session's steps (walk, run, ride) aren't "exercises" in that taxonomy at
+    all, so they skip classification and go out as plain description-only
+    steps (see _emit_step's classify flag)."""
+    classify = session.kind != "conditioning"
+    classified = classify_all([s.exercise for s in session.steps], resolver) if classify else {}
     steps: list[dict[str, Any]] = []
     order = 1
     for step in session.steps:
@@ -594,9 +611,10 @@ def build_strength_payload(
             time_sec=step.duration_sec,
             weight_kg=step.weight_kg,
             classified=classified,
+            classify=classify,
         )
         steps.extend(emitted)
-    return _wrap_payload(session.title, "strength", steps)
+    return _wrap_payload(session.title, session.kind, steps)
 
 
 def build_template_payload(
