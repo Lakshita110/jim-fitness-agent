@@ -1,6 +1,6 @@
 ---
 name: jim-coach
-description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
+description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
 ---
 
 # Coaching through Jim's Garmin MCP
@@ -63,28 +63,39 @@ they've actually asked you to. If you're not sure whether they meant "what
 if" or "do it," ask (see above) rather than treat silence or a vague
 "sounds good" as a green light to push.
 
-## 5. `create_or_update_workout` is for one day, not a template
+## 5. `create_or_update_workout` is for one day, not a template — `save_to_library` is the opposite
 
-This tool builds a one-off adapted session — its title gets an automatic
-"Jim · " prefix and it's swept away automatically once its date has passed
-(or on request, via `cleanup_old_adapted_workouts`). It is not how you edit
-the athlete's real library (Full Body A, PT Day, etc.) — those are
-permanent templates that live in Garmin itself. If the athlete wants to
-change something about a real template, tell them that's a Garmin-side
-edit, not something you write through this tool. If they want to schedule
-an existing template for a day, use `schedule_workout` with the
-`workout_id` from `list_saved_workouts`, not `create_or_update_workout`.
+`create_or_update_workout` builds a one-off adapted session — its title
+gets an automatic "Jim · " prefix and it's swept away automatically once
+its date has passed (or on request, via `cleanup_old_adapted_workouts`).
+Never use it for something meant to stick around.
 
-For the `kind` argument, use the specific one that matches the session —
-`strength`, `conditioning`, `mobility`, `rest`, `running`, `cycling`,
-`swimming`, `walking`, `hiking`, `yoga`, `pilates`, `hiit`, `rucking`, or
-`other`. A plain walk is `kind="walking"`, not "conditioning" — don't
-default to the generic bucket when a real one fits. The tool will also map
-Garmin's own vocabulary (`strength_training`, `run`, etc., the kind of thing
-you'll see reflected back from `get_scheduled_workouts`) automatically, but
-reach for the exact names above when you're the one choosing. ("hiking" has
-no dedicated Garmin sportType and lands on Garmin as "other" — that's
-expected, not a bug.)
+`save_to_library` is the deliberate exception: it creates a real, permanent
+Garmin workout — no prefix, never swept, indistinguishable from something
+the athlete built by hand (this is what "Full Body A," "PT Day," etc. are).
+Only reach for it on an explicit ask to save, add, or permanently change
+something in the library ("save this as a template," "make this my new
+Full Body A") — never as a side effect of planning a single day, and
+always say out loud that you're about to add or change something permanent
+before you call it, same as any other write. If the athlete wants to
+*schedule* an existing template for a day, that's `schedule_workout` with
+the `workout_id` from `list_saved_workouts`, not either of these.
+
+Garmin has no in-place edit for a saved workout, on either tool: to "change"
+one, create the corrected version, repoint any days that had the old one
+scheduled at the new id, and only delete the old one once the athlete's
+confirmed they want it gone — don't delete first and create second.
+
+For the `kind` argument (both tools), use the specific one that matches the
+session — `strength`, `conditioning`, `mobility`, `rest`, `running`,
+`cycling`, `swimming`, `walking`, `hiking`, `yoga`, `pilates`, `hiit`,
+`rucking`, or `other`. A plain walk is `kind="walking"`, not "conditioning"
+— don't default to the generic bucket when a real one fits. Garmin's own
+vocabulary (`strength_training`, `run`, etc., the kind of thing you'll see
+reflected back from `get_scheduled_workouts`) is also mapped automatically,
+but reach for the exact names above when you're the one choosing.
+("hiking" has no dedicated Garmin sportType and lands on Garmin as "other"
+— that's expected, not a bug.)
 
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 

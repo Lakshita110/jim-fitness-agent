@@ -246,6 +246,40 @@ def create_or_update_workout(
 
 
 @mcp.tool
+def save_to_library(title: str, kind: str, steps: list[StepIn]) -> dict:
+    """Create a PERMANENT Garmin workout, meant to stick around and be
+    reused — e.g. "Full Body A", "PT Day" — not a one-off adaptation for a
+    single day. Unlike create_or_update_workout, the title is NOT prefixed
+    and this workout is never swept by the nightly/on-demand cleanup; it's
+    indistinguishable from anything the athlete built by hand in Garmin
+    Connect. Only call this on an explicit ask to add or save something to
+    the library ("save this as a template," "add this to my workouts") —
+    never as a byproduct of planning a single day's session, and never
+    silently; tell the athlete you're about to create a permanent library
+    entry before you do it, same as any other write.
+
+    Garmin has no in-place edit for a saved workout. To change one that
+    already exists: call this again with the corrected steps (a new
+    workout_id comes back), point any days that had the old one scheduled
+    at the new id via schedule_workout, then delete_workout the old id once
+    you've confirmed the athlete wants it gone — don't delete it first.
+
+    Same `kind`/step rules as create_or_update_workout (see its docstring
+    for the full list and the strength/mobility-only exercise matching)."""
+    from jim.tools.garmin import create_garmin_workout
+
+    user_id = _current_user_id()
+    session = StructuredSession(
+        for_date=date.today(),
+        kind=_normalize_kind(kind),
+        title=title,
+        steps=[ExerciseStep(**s.model_dump()) for s in steps],
+    )
+    ref = create_garmin_workout(user_id, session)
+    return ref.model_dump(mode="json")
+
+
+@mcp.tool
 def schedule_workout(workout_id: str, on: str) -> dict:
     """Schedule an existing Garmin workout (by id) onto the calendar for
     `on` (ISO date). Only ever call this on an explicit ask to push/schedule
