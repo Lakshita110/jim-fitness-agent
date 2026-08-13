@@ -406,6 +406,39 @@ def test_approve_with_empty_draft_is_a_noop():
     assert f.scheduled == [] and f.recorded == []
 
 
+def test_approve_surfaces_a_garmin_failure_cleanly_instead_of_raising():
+    """A mid-push Garmin failure (expired session, Garmin outage) must show up
+    as a clean per-day line in the chat summary, not a raw exception reaching
+    the chat route as an unhandled 500."""
+    f = Fakes()
+    f.kv["draft"] = [
+        day("2026-07-09", garmin_workout_id="1414012813", template_key="full_body_a",
+            title="Full Body A", steps=[]),
+    ]
+    deps = f.deps()
+    object.__setattr__(
+        deps, "schedule_workout",
+        lambda wid, on: (_ for _ in ()).throw(RuntimeError("Garmin is temporarily unreachable")),
+    )
+    summary = approve(1, deps)
+    assert "couldn't push" in summary and "Garmin error" in summary
+    assert "2026-07-09" not in f.kv.get("pushed", {})
+    assert f.recorded == []  # refused push must not be recorded as a suggestion
+
+
+def test_push_day_surfaces_a_garmin_failure_cleanly_instead_of_raising():
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-10", title="Custom upper")]  # no template -> create path
+    deps = f.deps()
+    object.__setattr__(
+        deps, "create_garmin_workout",
+        lambda s: (_ for _ in ()).throw(RuntimeError("Garmin login failed")),
+    )
+    out = push_day("2026-07-10", 1, deps)
+    assert "couldn't push" in out["summary"] and "Garmin error" in out["summary"]
+    assert out["push_status"] == {}
+
+
 def test_llm_failure_degrades_gracefully():
     f = Fakes()
     deps = f.deps()

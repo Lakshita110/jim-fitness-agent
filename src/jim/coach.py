@@ -709,52 +709,59 @@ def _push_one(deps: CoachDeps, session: StructuredSession) -> tuple[bool, str]:
         return (False,
                 f"{fd}: couldn't push — {session.title!r} doesn't match any"
                 " playbook workout and has no steps to build from")
-    if session.kind == "rest":
-        # A rest day means nothing SHOULD be on the watch — but something may
-        # already be there from before this day became rest. Caught testing
-        # live: approve()'s pre-loop guard skipped clear_schedule specifically
-        # for rest days ("nothing to replace"), so turning an already-pushed
-        # day into rest via plan-my-week + approve left the stale real
-        # workout sitting on the watch while the summary claimed "nothing
-        # scheduled." clear_schedule reads Garmin's actual calendar for this
-        # date, so it's correct whether the prior day was a template pick or
-        # an adaptation.
-        deps.clear_schedule(fd)
-        created = deps.kv_get("jim_created_workouts") or {}
-        prior = created.pop(fd_iso, None)
-        if prior:
-            try:
-                deps.delete_garmin_workout(prior["workout_id"])
-            except Exception:
-                log.warning("couldn't delete prior adaptation %s for %s",
-                            prior["workout_id"], fd_iso, exc_info=True)
+    try:
+        if session.kind == "rest":
+            # A rest day means nothing SHOULD be on the watch — but something may
+            # already be there from before this day became rest. Caught testing
+            # live: approve()'s pre-loop guard skipped clear_schedule specifically
+            # for rest days ("nothing to replace"), so turning an already-pushed
+            # day into rest via plan-my-week + approve left the stale real
+            # workout sitting on the watch while the summary claimed "nothing
+            # scheduled." clear_schedule reads Garmin's actual calendar for this
+            # date, so it's correct whether the prior day was a template pick or
+            # an adaptation.
+            deps.clear_schedule(fd)
+            created = deps.kv_get("jim_created_workouts") or {}
+            prior = created.pop(fd_iso, None)
+            if prior:
+                try:
+                    deps.delete_garmin_workout(prior["workout_id"])
+                except Exception:
+                    log.warning("couldn't delete prior adaptation %s for %s",
+                                prior["workout_id"], fd_iso, exc_info=True)
+                deps.kv_set("jim_created_workouts", created)
+        elif as_template:
+            deps.schedule_workout(session.garmin_workout_id, fd)
+        else:
+            created = deps.kv_get("jim_created_workouts") or {}
+            prior = created.get(fd_iso)
+            if prior:
+                try:
+                    deps.delete_garmin_workout(prior["workout_id"])
+                except Exception:
+                    log.warning("couldn't delete prior adaptation %s for %s",
+                                prior["workout_id"], fd_iso, exc_info=True)
+            template_label = None
+            if session.template_key:
+                wt = deps.playbook().template(session.template_key)
+                template_label = wt.label if wt else None
+            titled = session.model_copy(update={
+                "title": adaptation_title(template_label, fd, session.title),
+            })
+            ref = deps.create_garmin_workout(titled)
+            deps.schedule_workout(ref.workout_id, fd)
+            created[fd_iso] = {
+                "workout_id": ref.workout_id,
+                "template_key": session.template_key,
+                "created_ts": deps.now().isoformat(),
+            }
             deps.kv_set("jim_created_workouts", created)
-    elif as_template:
-        deps.schedule_workout(session.garmin_workout_id, fd)
-    else:
-        created = deps.kv_get("jim_created_workouts") or {}
-        prior = created.get(fd_iso)
-        if prior:
-            try:
-                deps.delete_garmin_workout(prior["workout_id"])
-            except Exception:
-                log.warning("couldn't delete prior adaptation %s for %s",
-                            prior["workout_id"], fd_iso, exc_info=True)
-        template_label = None
-        if session.template_key:
-            wt = deps.playbook().template(session.template_key)
-            template_label = wt.label if wt else None
-        titled = session.model_copy(update={
-            "title": adaptation_title(template_label, fd, session.title),
-        })
-        ref = deps.create_garmin_workout(titled)
-        deps.schedule_workout(ref.workout_id, fd)
-        created[fd_iso] = {
-            "workout_id": ref.workout_id,
-            "template_key": session.template_key,
-            "created_ts": deps.now().isoformat(),
-        }
-        deps.kv_set("jim_created_workouts", created)
+    except Exception as e:
+        # A mid-push Garmin failure (expired session, Garmin outage) must
+        # surface as a clean per-day line in the chat summary, not a raw 500 —
+        # approve()/push_day() just relay this (ok, line) tuple as-is.
+        log.warning("garmin push failed for %s", fd_iso, exc_info=True)
+        return (False, f"{fd}: couldn't push — Garmin error: {e}")
     deps.record_suggestion(
         fd, session, session.rationale_summary, False, "fast", source="chat",
     )
