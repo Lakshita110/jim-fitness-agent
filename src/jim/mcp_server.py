@@ -197,6 +197,38 @@ def get_saved_workout(workout_id: str) -> dict:
     return get_garmin_workout_detail(_current_user_id(), workout_id)
 
 
+# --- TEMP: probing real Garmin sportTypeIds live, remove after use -----------
+
+
+@mcp.tool
+def _debug_probe_sport_id(for_date: str, sport_id: int) -> dict:
+    """TEMPORARY. Create a minimal workout tagged with a raw sportTypeId (not
+    a named kind) so the response can be read back to find out what Garmin
+    actually calls that id — there's no official docs for this, only
+    conflicting reverse-engineered lists."""
+    from jim.tools.garmin import client
+
+    api = client(_current_user_id())
+    payload = {
+        "workoutName": f"PROBE {sport_id}",
+        "sportType": {"sportTypeId": sport_id, "sportTypeKey": "probe"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": sport_id, "sportTypeKey": "probe"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 600,
+                "description": "probe",
+            }],
+        }],
+    }
+    resp = api.upload_workout(payload)
+    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp.get("sportType")}
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
