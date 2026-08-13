@@ -187,7 +187,9 @@ def test_signup_creates_user_and_sets_cookie(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     monkeypatch.setattr(auth, "create_user", lambda email, password: TEST_USER)
     r = client.post("/auth/signup", json={"email": "athlete@example.com", "password": "hunter2"})
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert auth.verify_session_token(r.json()["token"]) == TEST_USER.id
     assert auth.SESSION_COOKIE_NAME in r.cookies
 
 
@@ -208,7 +210,9 @@ def test_login_success_sets_cookie(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     monkeypatch.setattr(auth, "authenticate", lambda email, password: TEST_USER)
     r = client.post("/auth/login", json={"email": "athlete@example.com", "password": "hunter2"})
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert auth.verify_session_token(r.json()["token"]) == TEST_USER.id
     assert auth.SESSION_COOKIE_NAME in r.cookies
 
 

@@ -15,8 +15,17 @@ def _ready() -> None:
     ensure_migrated()
 
 
+def _bearer_token(request: Request) -> str:
+    """The MCP server (and any other non-browser client) has no cookie jar, so
+    it authenticates with the same signed token via `Authorization: Bearer
+    <token>` instead — same verification, different transport."""
+    header = request.headers.get("authorization", "")
+    scheme, _, value = header.partition(" ")
+    return value if scheme.lower() == "bearer" else ""
+
+
 def _current_user(request: Request) -> User | None:
-    token = request.cookies.get(auth.SESSION_COOKIE_NAME, "")
+    token = request.cookies.get(auth.SESSION_COOKIE_NAME, "") or _bearer_token(request)
     if not token:
         return None
     user_id = auth.verify_session_token(token)

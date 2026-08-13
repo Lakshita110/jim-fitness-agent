@@ -13,13 +13,24 @@ Backend-only: this is a pure JSON API with no HTML/frontend routes. The old
 inline HTML/CSS/JS pages have been scrapped; a new UI will be built separately
 against the API described below.
 
+**In transition:** Claude is becoming the reasoning engine, talking to Garmin
+directly through the MCP server at `/mcp` (`mcp_server.py`) instead of through
+`coach.py`'s own conversation loop. `coach.py`, `playbook.py`, and
+`agent/validate.py` are still present and still power the old `/chat/*` +
+`/api/playbook` routes, but are staged for removal once the MCP path is
+verified end-to-end (see the approved plan for this work). The one piece of
+Jim-side state the MCP path still needs is the small `constraints` table
+(knee/ankle limits, standing rules, goals) — everything the playbook's
+template library used to hold now lives in Garmin's own workout library.
+
 ## Module table
 
 | Path | Purpose | Status |
 |---|---|---|
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
-| `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, wires in `web/` routers | active |
-| `src/jim/web/{auth,chat,garmin,playbook}_routes.py`, `deps.py` | Pure JSON API routes (no HTML) | active |
+| `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, mounts the MCP app at `/mcp`, wires in `web/` routers | active |
+| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints. Bearer-token auth, re-resolved per call (see its docstring for why) | active, new |
+| `src/jim/web/{auth,chat,garmin,playbook,constraints}_routes.py`, `deps.py` | Pure JSON API routes (no HTML). `auth_routes` now also returns a bearer token on login/signup for non-browser clients (the MCP server) | active |
 | `src/jim/coach.py` | Chat: conversation, lookups, draft merge, goals memory, push, `plan_week()` | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
 | `src/jim/playbook.py` | Load/save the per-user playbook (Postgres JSONB); disk YAML is seed only | active |
@@ -32,7 +43,7 @@ against the API described below.
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | active |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | active |
-| `src/jim/migrations/001–010_*.sql` | Additive, idempotent, never edited after applied | active |
+| `src/jim/migrations/001–011_*.sql` | Additive, idempotent, never edited after applied | active |
 | `src/jim/data/garmin_exercises.json` | Vendored Garmin exercise taxonomy | active |
 | `playbook/{base_workouts.yaml,directives.md}` | The real athlete's committed content — one flat workout library (strength + PT) plus rotation order, real `garmin_workout_id`s | active |
 | `playbook/defaults/*` | Intentionally empty/generic seed for new signups | active |
@@ -75,7 +86,7 @@ rolling Garmin history for an existing user.
 
 ```bash
 ruff check . && pytest          # offline test suite
-uvicorn jim.app:app --reload    # sign in/up at /login, chat at /chat
+uvicorn jim.app:app --reload    # JSON API at /auth, /chat, /api/*, MCP at /mcp
 python -m jim.jobs.nightly      # nightly housekeeping, by hand
 ```
 

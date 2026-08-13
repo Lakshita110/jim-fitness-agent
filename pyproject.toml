@@ -16,12 +16,14 @@ dependencies = [
     "cryptography>=42",        # AES-GCM encryption of credentials at rest (crypto.py)
     "bcrypt>=4.0",              # password hashing (auth.py)
     "itsdangerous>=2.1",        # signed, expiring session cookies (auth.py)
+    "fastmcp>=2.0",             # Garmin MCP server (mcp_server.py)
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.5",
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",  # tests/test_mcp_server.py — async fastmcp.Client calls
     "pillow>=10.0",   # scripts/make_icon.py only — icons are committed, so the
                       # app never imports it at runtime (Render needs no fonts)
 ]
@@ -50,3 +52,4 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"

@@ -39,7 +39,11 @@ def auth_signup(body: SignupBody, request: Request, response: Response) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     _set_session_cookie(response, user.id, secure=request.url.scheme == "https")
-    return {"ok": True}
+    # Same token as the cookie, also returned as a plain string — a browser
+    # never needs this (it already has the cookie), but a non-browser client
+    # (the MCP server, a script) has nowhere else to get it. Paste it once
+    # into that client's own config; it's the only place it needs to live.
+    return {"ok": True, "token": auth.create_session_token(user.id)}
 
 
 @router.post("/auth/login")
@@ -52,7 +56,7 @@ def auth_login(body: LoginBody, request: Request, response: Response) -> dict:
         # accounts.
         raise HTTPException(status_code=401, detail="invalid email or password")
     _set_session_cookie(response, user.id, secure=request.url.scheme == "https")
-    return {"ok": True}
+    return {"ok": True, "token": auth.create_session_token(user.id)}
 
 
 @router.post("/auth/logout")

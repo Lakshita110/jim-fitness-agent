@@ -130,6 +130,27 @@ def save_user_credentials(user_id: int, **fields: Any) -> None:
         conn.commit()
 
 
+def get_constraints(user_id: int) -> str:
+    """The athlete's standing knee/ankle limits, safety rules, and goals —
+    free text, read by the MCP tools at the start of reasoning. Empty string
+    if never set (new signup)."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT content FROM constraints WHERE user_id = %s", (user_id,)
+        ).fetchone()
+    return row["content"] if row else ""
+
+
+def set_constraints(user_id: int, content: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO constraints (user_id, content, updated_ts) VALUES (%s, %s, now())"
+            " ON CONFLICT (user_id) DO UPDATE SET content = EXCLUDED.content, updated_ts = now()",
+            (user_id, content),
+        )
+        conn.commit()
+
+
 def migrate(conn: psycopg.Connection) -> None:
     """Apply every migrations/*.sql in name order. Files are idempotent, so we
     simply re-run them all — no version table needed while the set is small.
