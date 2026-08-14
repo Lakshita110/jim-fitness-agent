@@ -400,6 +400,50 @@ def research_training(question: str) -> list[dict]:
     return [hit.model_dump(mode="json") for hit in _research(question)]
 
 
+# --- technical notes: cross-user log of tool-usage/system mistakes -----------
+
+
+@mcp.tool
+def get_technical_notes(tag: str | None = None) -> list[dict]:
+    """Recent entries from a shared, cross-user log of technical/tool-usage
+    mistakes caught while coaching — a Garmin exercise-matching miss, an API
+    quirk, a confusing tool response, a `kind` that mapped somewhere
+    unexpected. NOT scientific claims (that's research_training) and NOT any
+    one athlete's own limits (that's get_constraints) — this is
+    operational/system knowledge shared across every athlete Jim coaches.
+    Cheap to call early in a session, same as get_constraints, so a known
+    gotcha doesn't get repeated. `tag` filters to entries carrying that
+    exact tag; omit it to get the most recent entries regardless of tag."""
+    from jim import db as _db
+
+    _current_user_id()
+    return [
+        {**row, "created_ts": row["created_ts"].isoformat()}
+        for row in _db.list_technical_notes(tag=tag)
+    ]
+
+
+@mcp.tool
+def report_technical_issue(title: str, note: str, tags: list[str] | None = None) -> dict:
+    """Log a technical/tool-usage mistake to the shared cross-user notes log
+    — call this when you catch a real system-level surprise: a tool
+    returning something you didn't expect, a Garmin quirk, an exercise name
+    that matched wrong, a `kind` that landed somewhere unintended. This is
+    NOT for the athlete's own training mistakes or setbacks (that belongs in
+    their constraints, if it changes a standing rule) and NOT a place to
+    record a scientific claim (that's the research corpus, human-curated
+    only). Write `note` so a future session — for a different athlete —
+    understands the mistake and what to do differently, not just what went
+    wrong for this one conversation. Every athlete's Claude session can
+    write and read this log, so keep entries genuinely general rather than
+    specific to this athlete's situation."""
+    from jim import db as _db
+
+    user_id = _current_user_id()
+    _db.add_technical_note(title, note, tags or [], user_id)
+    return {"ok": True}
+
+
 # --- constraints: the one remaining piece of Jim-side memory -----------------
 
 

@@ -151,6 +151,41 @@ def set_constraints(user_id: int, content: str) -> None:
         conn.commit()
 
 
+def add_technical_note(
+    title: str, note: str, tags: list[str], reported_by_user_id: int | None
+) -> None:
+    """Append a cross-user technical/tool-usage note (a Garmin quirk, an
+    exercise-matching miss, a confusing tool response) — never a scientific
+    claim (that's research_corpus) and never one athlete's own limits
+    (that's constraints). `reported_by_user_id` is provenance only; nothing
+    reads this table scoped to a user."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO technical_notes (title, note, tags, reported_by_user_id)"
+            " VALUES (%s, %s, %s, %s)",
+            (title, note, tags, reported_by_user_id),
+        )
+        conn.commit()
+
+
+def list_technical_notes(tag: str | None = None, limit: int = 50) -> list[dict]:
+    """Most recent technical notes, optionally filtered to ones carrying `tag`."""
+    with connect() as conn:
+        if tag:
+            rows = conn.execute(
+                "SELECT title, note, tags, created_ts FROM technical_notes"
+                " WHERE %s = ANY(tags) ORDER BY created_ts DESC LIMIT %s",
+                (tag, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT title, note, tags, created_ts FROM technical_notes"
+                " ORDER BY created_ts DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def migrate(conn: psycopg.Connection) -> None:
     """Apply every migrations/*.sql in name order. Files are idempotent, so we
     simply re-run them all — no version table needed while the set is small.

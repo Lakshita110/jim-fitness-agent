@@ -23,17 +23,30 @@ limits, standing rules, goals) — everything the old playbook's template
 library used to hold now lives in Garmin's own workout library, and safety
 lives in `skills/jim-coach/SKILL.md` instead of a code guardrail.
 
+There are three distinct memory stores now, deliberately not merged: `constraints`
+is one athlete's own limits (write access: that athlete's own sessions, via
+`set_constraints`); `research_corpus` is scientific training literature
+(write access: operator-curated only, via `scripts/seed_corpus.py`);
+`technical_notes` is a cross-user log of tool-usage/system mistakes Claude
+catches while coaching (write access: any athlete's session, via
+`report_technical_issue` — self-service, unlike the other two, since these
+are advisory operational notes rather than safety rules or scientific
+claims). Self-editing `skills/jim-coach/SKILL.md` itself was deliberately
+ruled out — it's the safety layer, and letting the model rewrite the rules
+that constrain it based on its own inference about its mistakes was judged
+too risky to automate.
+
 ## Module table
 
 | Path | Purpose | Status |
 |---|---|---|
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, mounts the MCP app at `/mcp`, wires in `web/` routers | active |
-| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints, `research_training` lookups. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
+| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints, `research_training` lookups, `get_technical_notes`/`report_technical_issue`. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
 | `skills/jim-coach/SKILL.md` | Operating instructions for Claude when it's the one calling the MCP tools — constraints-first, data-grounded recommendations, never write without an explicit ask, `set_constraints` is a full replace. This is the safety layer now that there's no code guardrail | active |
 | `src/jim/web/{auth,garmin,constraints}_routes.py`, `deps.py` | Pure JSON API routes (no HTML). `auth_routes` also returns a bearer token on login/signup for non-browser clients (the MCP server) | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
-| `src/jim/config.py`, `db.py`, `auth.py`, `crypto.py` | Settings, Postgres/`kv`, auth, at-rest credential encryption | active |
+| `src/jim/config.py`, `db.py`, `auth.py`, `crypto.py` | Settings, Postgres/`kv`, `technical_notes` (cross-user tool-mistake log), auth, at-rest credential encryption | active |
 | `src/jim/tools/garmin.py` | Garmin reads/writes + workout scheduling + exercise-taxonomy matching | active |
 | `src/jim/tools/exercise_match.py` | LLM fallback for unmatched exercise names, validated against the vendored taxonomy | active |
 | `src/jim/tools/history.py` | Deterministic features + readiness read | active |
@@ -41,7 +54,7 @@ lives in `skills/jim-coach/SKILL.md` instead of a code guardrail.
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | needs-review — nothing calls `record_suggestion` now that `coach.py` is gone, see Unresolved |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | needs-review — depends on `suggestions` rows nothing currently writes, see Unresolved |
-| `src/jim/migrations/001–012_*.sql` | Additive, idempotent, never edited after applied. `012_drop_playbooks.sql` drops `007_users.sql`'s `playbooks` table now that nothing reads or writes it | active |
+| `src/jim/migrations/001–013_*.sql` | Additive, idempotent, never edited after applied. `012_drop_playbooks.sql` drops `007_users.sql`'s `playbooks` table now that nothing reads or writes it; `013_technical_notes.sql` adds the cross-user tool-mistake log | active |
 | `src/jim/data/garmin_exercises.json` | Vendored Garmin exercise taxonomy | active |
 | `data/corpus/*` | Research corpus source markdown, seeded via `scripts/seed_corpus.py` into `research_corpus` (pgvector). Shared across every athlete — general training science, not any one athlete's protocol; per-athlete specifics stay in `constraints` | active |
 | `scripts/backfill_users.py` | One-off: creates the original athlete's user row, backfills `user_id` onto pre-multi-tenant rows. No longer touches a playbook. Not idempotent by design | active (one-off, already run) |
