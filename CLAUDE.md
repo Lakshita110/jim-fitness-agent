@@ -41,7 +41,7 @@ lives in `skills/jim-coach/SKILL.md` instead of a code guardrail.
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | needs-review — nothing calls `record_suggestion` now that `coach.py` is gone, see Unresolved |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | needs-review — depends on `suggestions` rows nothing currently writes, see Unresolved |
-| `src/jim/migrations/001–011_*.sql` | Additive, idempotent, never edited after applied. `007_users.sql`'s `playbooks` table is now unread/unwritten dead data, left in place rather than dropped | active |
+| `src/jim/migrations/001–012_*.sql` | Additive, idempotent, never edited after applied. `012_drop_playbooks.sql` drops `007_users.sql`'s `playbooks` table now that nothing reads or writes it | active |
 | `src/jim/data/garmin_exercises.json` | Vendored Garmin exercise taxonomy | active |
 | `data/corpus/*` | Research corpus source + template | needs-review — not traced to `research.py` ingestion path this session |
 | `scripts/backfill_users.py` | One-off: creates the original athlete's user row, backfills `user_id` onto pre-multi-tenant rows. No longer touches a playbook. Not idempotent by design | active (one-off, already run) |
@@ -77,9 +77,5 @@ python -m jim.jobs.nightly      # nightly housekeeping, by hand
   research/adherence tracking should be wired into MCP tools, or this code
   should be retired too, wasn't decided this session — flagged rather than
   guessed at.
-- The `playbooks` Postgres table (migration `007_users.sql`) is no longer
-  read or written by any code path. Left in place rather than dropped via a
-  new migration — that's a real destructive-to-decide-on-your-own-schedule
-  call, not this session's to make.
 - Whether `data/corpus/*` and the five untraced `scripts/*` utilities are
   still exercised by any current path.

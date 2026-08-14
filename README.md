@@ -44,7 +44,7 @@ src/jim/
   config.py          # constants + env-backed secrets
   schemas.py         # typed tool contracts, incl. StructuredSession
   db.py              # Postgres + idempotent migrations + kv store (composite user_id, key)
-  migrations/        # additive, idempotent SQL (001-011); ships inside the package
+  migrations/        # additive, idempotent SQL (001-012); ships inside the package
   auth.py            # email+password signup/login, session cookies + bearer tokens, _require_user
   crypto.py          # AES-GCM encrypt/decrypt for Garmin creds at rest
   tools/             # garmin, history, research (gated), memory, exercise_match
