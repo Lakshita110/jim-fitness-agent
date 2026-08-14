@@ -154,6 +154,40 @@ def get_garmin_today(user_id: int, day: date) -> GarminToday:
     )
 
 
+def get_training_readiness(user_id: int, day: date) -> dict:
+    """Garmin's own dedicated readiness verdict + the specific factors behind
+    it (sleep, HRV, recovery time, acute load, stress) — richer than the
+    single trainingReadinessScore number get_garmin_today pulls out of the
+    generic daily stats blob."""
+    api = client(user_id)
+    result = api.get_training_readiness(day.isoformat())
+    # Garmin returns a list with one entry per day queried; cdate is a single day.
+    if isinstance(result, list):
+        return result[0] if result else {}
+    return result or {}
+
+
+def get_training_status(user_id: int, day: date) -> dict:
+    """Garmin's own training-load verdict (productive, peaking, overreaching,
+    detraining, unproductive, ...) plus VO2max trend — a second, differently-
+    computed opinion alongside Jim's own ACWR-based readiness_read."""
+    api = client(user_id)
+    return api.get_training_status(day.isoformat()) or {}
+
+
+def get_daily_steps(user_id: int, start: date, end: date) -> list[dict]:
+    """Daily step counts (and Garmin's own step goal) for [start, end]."""
+    api = client(user_id)
+    return api.get_daily_steps(start.isoformat(), end.isoformat()) or []
+
+
+def get_weigh_ins(user_id: int, start: date, end: date) -> dict:
+    """Logged bodyweight entries for [start, end] (whatever the athlete or a
+    connected smart scale has recorded in Garmin Connect)."""
+    api = client(user_id)
+    return api.get_weigh_ins(start.isoformat(), end.isoformat()) or {}
+
+
 def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
     """First-ever real Garmin data for this user: garmin_daily has zero
     rows, so query_history/readiness_read would have nothing to work with

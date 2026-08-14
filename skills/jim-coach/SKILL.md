@@ -1,6 +1,6 @@
 ---
 name: jim-coach
-description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
+description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_training_readiness, get_training_status, get_exercise_history, get_recent_activities, get_daily_steps, get_weigh_ins, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
 ---
 
 # Coaching through Jim's Garmin MCP
@@ -41,6 +41,15 @@ history — you can't tell whether pain means "skip legs entirely" or "swap
 the one exercise," or the athlete's ask could mean two different days —
 ask rather than guess. A clarifying question costs one turn; a wrong guess
 that gets pushed to a real watch costs more.
+
+`get_training_readiness` and `get_training_status` are Garmin's own
+readiness/load verdicts, computed differently from `get_readiness` (Jim's
+own ACWR-based one) — worth pulling as a second opinion before a hard
+session, or if the athlete says something feels off despite `get_readiness`
+looking fine. `get_daily_steps` and `get_weigh_ins` are lower-priority
+context, not day-to-day training-decision inputs — reach for them when
+they're actually relevant (the athlete asks about their weight trend or
+overall activity), not as part of every session check.
 
 ## 3. Always show the plan as a readable draft before writing anything
 

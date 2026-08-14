@@ -150,6 +150,60 @@ def get_readiness(as_of: str | None = None) -> dict:
 
 
 @mcp.tool
+def get_training_readiness(as_of: str | None = None) -> dict:
+    """Garmin's own dedicated readiness verdict for today (or `as_of`, ISO
+    date) plus the specific factors behind it (sleep, HRV, recovery time,
+    acute training load, stress). This is richer and differently computed
+    than `get_readiness` (Jim's own ACWR-based verdict) — worth pulling both
+    when you want a second opinion, e.g. before a hard session or if
+    something feels off despite `get_readiness` looking fine."""
+    from jim.tools.garmin import get_training_readiness as _get
+
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    day = date.fromisoformat(as_of) if as_of else date.today()
+    return _get(user_id, day)
+
+
+@mcp.tool
+def get_training_status(as_of: str | None = None) -> dict:
+    """Garmin's own training-load classification for today (or `as_of`, ISO
+    date) — productive, peaking, overreaching, detraining, unproductive,
+    etc. — plus VO2max trend. A longer-horizon fitness-trend signal, not a
+    day-to-day push/rest call; useful when the athlete asks how their
+    training is trending, not for "what should today look like"."""
+    from jim.tools.garmin import get_training_status as _get
+
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    day = date.fromisoformat(as_of) if as_of else date.today()
+    return _get(user_id, day)
+
+
+@mcp.tool
+def get_daily_steps(start: str, end: str) -> list[dict]:
+    """Daily step counts (and Garmin's own step goal) for [start, end] (ISO
+    dates, inclusive) — general daily activity, not structured training."""
+    from jim.tools.garmin import get_daily_steps as _get
+
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    return _get(user_id, date.fromisoformat(start), date.fromisoformat(end))
+
+
+@mcp.tool
+def get_weigh_ins(start: str, end: str) -> dict:
+    """Logged bodyweight entries for [start, end] (ISO dates, inclusive) —
+    whatever the athlete or a connected smart scale has recorded in Garmin
+    Connect. Empty if they don't log weight."""
+    from jim.tools.garmin import get_weigh_ins as _get
+
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    return _get(user_id, date.fromisoformat(start), date.fromisoformat(end))
+
+
+@mcp.tool
 def get_exercise_history(exercise: str, days: int = 180) -> str:
     """How the athlete actually performed a movement recently (sets/reps/kg
     per session) — fuzzy-matched against logged Garmin sets."""
