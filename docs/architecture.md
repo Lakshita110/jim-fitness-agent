@@ -4,6 +4,13 @@ One cheap-LLM agent (the chat), a nightly cron that does housekeeping only —
 no auto-drafted plan — a hard deterministic guardrail in front of anything
 that reaches the watch, and memory split by how durable it is.
 
+**This document describes the `coach.py` chat path**, which is still active
+but staged for removal. Jim is transitioning to a Garmin MCP server
+(`src/jim/mcp_server.py`, mounted at `/mcp`) where Claude itself is the
+reasoning engine instead of `coach.py`'s own conversation loop — no separate
+guardrail module behind it, since `skills/jim-coach/SKILL.md` is the safety
+layer for that path. See `CLAUDE.md` for the current status of both paths.
+
 ```mermaid
 flowchart TB
     subgraph you["You"]

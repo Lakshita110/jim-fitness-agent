@@ -1,5 +1,12 @@
 # Jim's chat — API
 
+**This document describes the `/chat/*` API backed by `coach.py`**, which is
+still active but staged for removal once the Garmin MCP path
+(`src/jim/mcp_server.py`, mounted at `/mcp`, operating instructions in
+`skills/jim-coach/SKILL.md`) is verified end-to-end. In the MCP path an
+MCP-capable client (e.g. Claude) talks to Garmin directly instead of through
+this API — see `CLAUDE.md` for current status.
+
 One conversation with your coach, exposed as a JSON API. A client iterates on
 a plan for tomorrow or the week, keeps long-term goals in plain language, and
 **nothing touches your watch until it calls `/chat/approve` or

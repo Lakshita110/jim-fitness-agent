@@ -79,9 +79,9 @@ def get_user_by_email(email: str) -> User | None:
 
 def first_user_id() -> int | None:
     """The lowest user id in the system. Used by one-off local scripts
-    (scripts/backfill.py, exercise_map.py, m1_roundtrip.py) that operate on
-    "whoever's account is here" during development — not by app.py or the
-    nightly job, which resolve a real caller/fan out over every user."""
+    (scripts/backfill.py, exercise_map.py) that operate on "whoever's
+    account is here" during development — not by app.py or the nightly
+    job, which resolve a real caller/fan out over every user."""
     with connect() as conn:
         row = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
     return row["id"] if row else None

@@ -1,5 +1,12 @@
 # Memory & instructions
 
+**This document describes memory as used by the `coach.py` chat path**,
+still active but staged for removal. On the Garmin MCP path
+(`src/jim/mcp_server.py`), the playbook's template library is gone — named
+workouts live in Garmin's own library instead — and the only Jim-side state
+left is the `constraints` table (`get_constraints`/`set_constraints`); see
+`skills/jim-coach/SKILL.md`. What follows applies to the chat path only.
+
 Jim has four memory layers, ordered by how durable they are and who writes
 them. This is the answer to "how do I give the agent instructions."
 

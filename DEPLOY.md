@@ -148,6 +148,12 @@ only ever logs in once; every `/chat/*` and `/settings/garmin/*` request
 after that authenticates with the cookie. See `docs/chat.md` for the full
 endpoint list.
 
+The same login/signup response also returns a bearer token, for clients that
+can't hold a cookie jar — an MCP-capable client (e.g. Claude) points at
+`https://<your-app>.vercel.app/mcp` with `Authorization: Bearer <token>` (or
+`?token=<token>` on the connector URL) instead. See `src/jim/mcp_server.py`
+and `skills/jim-coach/SKILL.md`.
+
 > **Your password is the only thing protecting your account.** Anyone who signs in
 > can talk to Jim and push workouts to your watch. To invalidate every session
 > at once (e.g. after rotating secrets): change `SESSION_SECRET` in Vercel and

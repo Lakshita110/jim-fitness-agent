@@ -10,15 +10,21 @@ garmin_strength).
 
 A personal training agent, multi-tenant: each signed-up account connects its
 own Garmin, edits its own playbook, and gets its own nightly housekeeping run.
-Plans come from talking to **Jim's chat**, a JSON API (`docs/chat.md`) where
-the athlete reasons with Jim about the next session within their knee/ankle
-constraints (using real Garmin history) and pushes structured workouts to
-Garmin on approve. Nightly housekeeping just keeps that history fresh — it
-never writes a plan itself.
+
+**In transition:** Claude is becoming the reasoning engine, talking to Garmin
+directly through the MCP server at `/mcp` (`src/jim/mcp_server.py`, operating
+instructions in `skills/jim-coach/SKILL.md`) instead of through `coach.py`'s
+own conversation loop. `coach.py`, `playbook.py`, and `agent/validate.py`
+still power the old `/chat/*` + `/api/playbook` routes described below and
+in `docs/chat.md` — they're staged for removal once the MCP path is verified
+end-to-end, not gone yet. Either way, the athlete reasons about the next
+session within their knee/ankle constraints (using real Garmin history) and
+pushes structured workouts to Garmin only on an explicit ask. Nightly
+housekeeping just keeps that history fresh — it never writes a plan itself.
 Python 3.11+, FastAPI, Postgres, OpenRouter (via the `openai` SDK),
-`garminconnect`. Backend-only: there is no HTML/frontend in this repo — the
-old inline chat UI was scrapped, and a new UI is expected to be built
-separately against the JSON API.
+`garminconnect`, `fastmcp`. Backend-only: there is no HTML/frontend in this
+repo — the old inline chat UI was scrapped, and a new UI is expected to be
+built separately against the JSON API.
 
 Work happens on `main` (github.com/Lakshita110/jim-fitness-agent).
 `AUTO_PUSH=False`: nothing auto-schedules — workouts reach the watch
@@ -68,7 +74,7 @@ Verify, then run:
 
 ```bash
 ruff check .
-pytest                            # 215 tests, all offline
+pytest                            # 265 tests, all offline
 python scripts/backfill.py 120    # first run: pull ~120d of Garmin history
 uvicorn jim.app:app --reload
 ```
@@ -80,6 +86,12 @@ session cookie, so subsequent requests to `/chat/*` need no key or password.
 Try `POST /chat/message` with `{"text": "plan my week"}` or
 `{"text": "my knee is sore today"}` — see `docs/chat.md` for the full
 endpoint list.
+
+To exercise the new MCP path instead, `POST /auth/login` returns a bearer
+token alongside the session cookie — point an MCP-capable client (e.g.
+Claude, via a connector) at `/mcp` with `Authorization: Bearer <token>` (or
+`?token=<token>` on the connector URL if it can't set headers), and follow
+`skills/jim-coach/SKILL.md` for how Claude is meant to use those tools.
 
 ## Gotchas learned the hard way
 

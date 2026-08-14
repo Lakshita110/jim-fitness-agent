@@ -52,7 +52,6 @@ template library used to hold now lives in Garmin's own workout library.
 | `scripts/backfill_users.py` | One-off: creates the original athlete's user row, seeds their playbook, backfills `user_id` onto pre-multi-tenant rows. Not idempotent by design | active (one-off, already run) |
 | `scripts/backfill.py` | Repeatable ~90-day Garmin history backfill for an existing user. Idempotent | active |
 | `scripts/exercise_map.py`, `garmin_login.py`, `make_icon.py`, `refresh_garmin_exercises.py`, `seed_corpus.py` | Ops/dev utilities | needs-review — not individually verified this session |
-| `scripts/m1_roundtrip.py` | Standalone dev CLI, named for an early single-user milestone; referenced only in `README.md` and a comment in `auth.py`, never imported | stale — likely safe to remove, confirm before deleting |
 | `tests/*` | Offline, fixture/fake-driven, one file per module + `test_multi_user_isolation.py` (load-bearing) | active |
 | `docs/*.md`, `README.md`, `HANDOFF.md` | Architecture/chat/memory/deploy docs | needs-review — not re-verified against current code this session |
 
