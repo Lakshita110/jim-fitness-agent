@@ -168,21 +168,28 @@ def add_technical_note(
         conn.commit()
 
 
-def list_technical_notes(tag: str | None = None, limit: int = 50) -> list[dict]:
-    """Most recent technical notes, optionally filtered to ones carrying `tag`."""
+def list_technical_notes(
+    query: str | None = None, tag: str | None = None, limit: int = 50
+) -> list[dict]:
+    """Most recent technical notes. `query` does a plain substring match
+    against title+note (no embeddings — this table is meant to stay small
+    enough that a keyword search is enough); `tag` filters to an exact tag
+    match. Both may be combined; omit both for the most recent entries."""
+    where = []
+    params: list = []
+    if query:
+        where.append("(title ILIKE %s OR note ILIKE %s)")
+        params += [f"%{query}%", f"%{query}%"]
+    if tag:
+        where.append("%s = ANY(tags)")
+        params.append(tag)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
     with connect() as conn:
-        if tag:
-            rows = conn.execute(
-                "SELECT title, note, tags, created_ts FROM technical_notes"
-                " WHERE %s = ANY(tags) ORDER BY created_ts DESC LIMIT %s",
-                (tag, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT title, note, tags, created_ts FROM technical_notes"
-                " ORDER BY created_ts DESC LIMIT %s",
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(
+            f"SELECT title, note, tags, created_ts FROM technical_notes"
+            f" {clause} ORDER BY created_ts DESC LIMIT %s",
+            (*params, limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 

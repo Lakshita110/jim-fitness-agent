@@ -42,7 +42,7 @@ too risky to automate.
 |---|---|---|
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, mounts the MCP app at `/mcp`, wires in `web/` routers | active |
-| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints, `research_training` lookups, `get_technical_notes`/`report_technical_issue`. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
+| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints, `research_training` (science + technical-notes lookups via `domain=`), `report_technical_issue`. Kept to 17 tools total on purpose — a new lookup got folded into `research_training`'s `domain` param rather than adding another tool, since more tools costs more context per call and more chances for the model to pick the wrong one. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
 | `skills/jim-coach/SKILL.md` | Operating instructions for Claude when it's the one calling the MCP tools — constraints-first, data-grounded recommendations, never write without an explicit ask, `set_constraints` is a full replace. This is the safety layer now that there's no code guardrail | active |
 | `src/jim/web/{auth,garmin,constraints}_routes.py`, `deps.py` | Pure JSON API routes (no HTML). `auth_routes` also returns a bearer token on login/signup for non-browser clients (the MCP server) | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
@@ -50,7 +50,7 @@ too risky to automate.
 | `src/jim/tools/garmin.py` | Garmin reads/writes + workout scheduling + exercise-taxonomy matching | active |
 | `src/jim/tools/exercise_match.py` | LLM fallback for unmatched exercise names, validated against the vendored taxonomy | active |
 | `src/jim/tools/history.py` | Deterministic features + readiness read | active |
-| `src/jim/tools/research.py` | Corpus/Tavily research (`research_training`) — pgvector search over `data/corpus/*`, Tavily to top up, both domain-restricted. Exposed as the `research_training` MCP tool | active |
+| `src/jim/tools/research.py` | Corpus/Tavily research — pgvector search over `data/corpus/*`, Tavily to top up, both domain-restricted. Exposed as `research_training(domain="science")`; `domain="technical"` on the same tool instead reads `technical_notes` via `db.list_technical_notes` | active |
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | needs-review — nothing calls `record_suggestion` now that `coach.py` is gone, see Unresolved |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | needs-review — depends on `suggestions` rows nothing currently writes, see Unresolved |

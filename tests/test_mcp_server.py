@@ -125,12 +125,9 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
             {"source": "corpus.md", "title": "A title", "snippet": "snip", "score": 0.9}
         ]
 
-        # technical_notes: shared cross-user log, not keyed by user_id, but
-        # still auth-gated, and a write is stamped with the reporting user.
-        async with _asgi_client() as c:
-            with pytest.raises(ToolError, match="missing token"):
-                await c.call_tool("get_technical_notes", {})
-
+        # technical_notes: reached through research_training(domain="technical")
+        # rather than a separate tool — shared cross-user log, not keyed by
+        # user_id, but still auth-gated; a write is stamped with the reporter.
         notes_written: list[tuple] = []
         monkeypatch.setattr(
             db, "add_technical_note",
@@ -146,14 +143,18 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
 
         from datetime import datetime
 
+        queries_asked = []
         monkeypatch.setattr(
             db, "list_technical_notes",
-            lambda tag=None, limit=50: [
+            lambda query=None, tag=None, limit=50: queries_asked.append(query) or [
                 {"title": "t", "note": "n", "tags": [], "created_ts": datetime(2026, 1, 1)}
             ],
         )
         async with _asgi_client({"Authorization": f"Bearer {token_b}"}) as c:
-            read_result = await c.call_tool("get_technical_notes", {})
+            read_result = await c.call_tool(
+                "research_training", {"question": "kind mismatch", "domain": "technical"}
+            )
+        assert queries_asked == ["kind mismatch"]
         assert read_result.data == [
             {"title": "t", "note": "n", "tags": [], "created_ts": "2026-01-01T00:00:00"}
         ]

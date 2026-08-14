@@ -34,8 +34,8 @@ flowchart TB
         READS["reads: get_readiness, get_training_readiness,<br/>get_training_status, get_exercise_history,<br/>get_recent_activities, get_daily_steps,<br/>get_weigh_ins, get_scheduled_workouts,<br/>list_saved_workouts, get_saved_workout"]
         WRITES["writes: create_or_update_workout (one-off),<br/>save_to_library (permanent), schedule_workout,<br/>unschedule_day, delete_workout"]
         CONSTRAINTS["get_constraints / set_constraints<br/>(full-replace document)"]
-        RESEARCH["research_training: corpus search<br/>+ domain-restricted Tavily top-up"]
-        TECHTOOLS["get_technical_notes / report_technical_issue"]
+        RESEARCH["research_training: corpus search + Tavily<br/>(domain=science) or technical_notes<br/>keyword search (domain=technical) — one<br/>tool, not two, to keep the tool count down"]
+        TECHWRITE["report_technical_issue"]
         BACKFILL["backfill_history, cleanup_old_adapted_workouts"]
     end
 
@@ -48,11 +48,11 @@ flowchart TB
     CRON -->|"sweep stale one-off<br/>adaptations"| GARMINAPI
 
     CLAUDE <--> MCPAPI
-    MCPAPI --> READS & WRITES & CONSTRAINTS & RESEARCH & TECHTOOLS & BACKFILL
+    MCPAPI --> READS & WRITES & CONSTRAINTS & RESEARCH & TECHWRITE & BACKFILL
     READS --> TABLES
     CONSTRAINTS --> USERS
-    RESEARCH --> CORPUS
-    TECHTOOLS <--> TECHNOTES
+    RESEARCH <--> CORPUS & TECHNOTES
+    TECHWRITE --> TECHNOTES
     WRITES -->|"explicit ask only"| GARMINAPI
     GARMINAPI -->|"scheduled workout<br/>syncs to watch"| WATCH
 
@@ -90,12 +90,16 @@ server-side conversation state or draft-merge step — each tool call acts
 immediately against Garmin or Postgres, and the judgment calls a backend
 guardrail used to make (forbidden movements, never pushing without
 confirmation, treating `set_constraints` as a full replace) are the model's
-to make, per `skills/jim-coach/SKILL.md`. Two more tool groups exist purely
-for judgment, not writes: `research_training` for scientific training
-questions, and `get_technical_notes`/`report_technical_issue` for a
-cross-user log of tool-usage/system mistakes — see "Memory hierarchy" below
-for why those two are kept structurally apart from each other and from
-`constraints`.
+to make, per `skills/jim-coach/SKILL.md`. Two more tools exist purely for
+judgment, not writes: `research_training` (one tool, two `domain`s —
+scientific training questions, or a keyword search over the cross-user
+technical-mistakes log) and `report_technical_issue` to add to that log —
+see "Memory hierarchy" below for why the underlying stores are kept
+structurally apart from each other and from `constraints` even though the
+read side is one tool. Deliberately kept to 17 MCP tools total: a new
+lookup became a `domain` param on an existing tool rather than a new one,
+since more tools means more context spent per call and more chances for
+the model to pick the wrong one.
 
 **Pushing** — nothing reaches the watch except an explicit MCP write-tool
 call. `create_or_update_workout` builds a one-off adapted session (auto
@@ -130,8 +134,8 @@ docstring for why nothing about identity is cached).
 | Named/reusable workouts | Garmin's own workout library | `save_to_library`, or the athlete directly in Garmin Connect | until edited/deleted |
 | One-off adapted sessions | Garmin's calendar, `"Jim · "`-prefixed | `create_or_update_workout` | until the date passes (auto-swept) |
 | exercise_sets / activities / garmin_daily | Postgres | the nightly sync | history |
-| Training science (shared, not per-athlete) | Postgres `research_corpus` | `scripts/seed_corpus.py`, operator-curated only — no MCP write tool | until re-seeded |
-| Tool-usage/system mistakes (shared, not per-athlete, not scientific) | Postgres `technical_notes` | `report_technical_issue`, any athlete's session, self-service | grows indefinitely; no expiry today |
+| Training science (shared, not per-athlete) | Postgres `research_corpus` | `scripts/seed_corpus.py`, operator-curated only — no MCP write tool. Read via `research_training(domain="science")` | until re-seeded |
+| Tool-usage/system mistakes (shared, not per-athlete, not scientific) | Postgres `technical_notes` | `report_technical_issue`, any athlete's session, self-service. Read via `research_training(domain="technical")` | grows indefinitely; no expiry today |
 
 Deliberately not on this list: `skills/jim-coach/SKILL.md` itself. It's the
 safety layer, so it stays operator-edited — letting Claude rewrite the rules

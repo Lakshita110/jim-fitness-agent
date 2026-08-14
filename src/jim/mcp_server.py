@@ -374,69 +374,63 @@ def cleanup_old_adapted_workouts(lookback_days: int = 30) -> dict:
     return {"ok": True}
 
 
-# --- research: grounded fitness/training-science lookups ---------------------
+# --- research: grounded lookups, shared across every athlete -----------------
 
 
 @mcp.tool
-def research_training(question: str) -> list[dict]:
-    """Look up grounded, source-cited training-science snippets for a
-    question that needs more than opinion — e.g. "how should I load an
-    irritated patellar tendon" or "how much weekly volume before overtraining
-    risk goes up." Searches a curated corpus first (vetted articles, clinical
-    practice guidelines, PT protocols), then tops up with a domain-restricted
-    web search if the corpus doesn't have enough on that topic.
+def research_training(question: str, domain: str = "science") -> list[dict]:
+    """Look up grounded snippets for a question that needs more than opinion
+    — general training science shared across every athlete Jim coaches, NOT
+    this athlete's specifics (always combine with get_constraints for what
+    actually applies to who you're talking to) and NOT the athlete's own
+    training mistakes (that belongs in their constraints if it changes a
+    standing rule).
 
-    This is general training science shared across every athlete Jim
-    coaches, not this athlete's specifics — always combine it with
-    get_constraints for whatever actually applies to the person you're
-    talking to right now. Each hit carries a `source` so you can cite it
-    rather than presenting it as your own claim. May return an empty list if
-    nothing relevant is in the corpus and the web search also comes up dry —
-    that's a real answer, not a failure, and you should say so rather than
-    inventing a citation."""
+    `domain="science"` (default) — a scientific/training-load question, e.g.
+    "how should I load an irritated patellar tendon" or "how much weekly
+    volume before overtraining risk goes up." Searches a curated corpus of
+    vetted articles/clinical guidelines first, then tops up with a
+    domain-restricted web search. Each hit carries a `source`; cite it
+    rather than presenting it as your own claim.
+
+    `domain="technical"` — has this exact system/tool-usage mistake been
+    caught before, by you or another session? A Garmin quirk, an
+    exercise-matching miss, a `kind` that mapped somewhere unexpected.
+    Keyword search (not semantic) over a shared, cross-user notes log — pass
+    the term you'd search for, not a full sentence. Cheap to check before a
+    write you're unsure about.
+
+    Either domain may return an empty list — that's a real answer, not a
+    failure; say so rather than inventing a citation or assuming nothing's
+    ever gone wrong."""
+    _current_user_id()  # require sign-in, same as every other tool
+    if domain == "technical":
+        from jim import db as _db
+
+        return [
+            {**row, "created_ts": row["created_ts"].isoformat()}
+            for row in _db.list_technical_notes(query=question)
+        ]
     from jim.tools.research import research_training as _research
 
-    _current_user_id()  # require sign-in, same as every other tool
     return [hit.model_dump(mode="json") for hit in _research(question)]
-
-
-# --- technical notes: cross-user log of tool-usage/system mistakes -----------
-
-
-@mcp.tool
-def get_technical_notes(tag: str | None = None) -> list[dict]:
-    """Recent entries from a shared, cross-user log of technical/tool-usage
-    mistakes caught while coaching — a Garmin exercise-matching miss, an API
-    quirk, a confusing tool response, a `kind` that mapped somewhere
-    unexpected. NOT scientific claims (that's research_training) and NOT any
-    one athlete's own limits (that's get_constraints) — this is
-    operational/system knowledge shared across every athlete Jim coaches.
-    Cheap to call early in a session, same as get_constraints, so a known
-    gotcha doesn't get repeated. `tag` filters to entries carrying that
-    exact tag; omit it to get the most recent entries regardless of tag."""
-    from jim import db as _db
-
-    _current_user_id()
-    return [
-        {**row, "created_ts": row["created_ts"].isoformat()}
-        for row in _db.list_technical_notes(tag=tag)
-    ]
 
 
 @mcp.tool
 def report_technical_issue(title: str, note: str, tags: list[str] | None = None) -> dict:
     """Log a technical/tool-usage mistake to the shared cross-user notes log
-    — call this when you catch a real system-level surprise: a tool
-    returning something you didn't expect, a Garmin quirk, an exercise name
-    that matched wrong, a `kind` that landed somewhere unintended. This is
-    NOT for the athlete's own training mistakes or setbacks (that belongs in
-    their constraints, if it changes a standing rule) and NOT a place to
-    record a scientific claim (that's the research corpus, human-curated
-    only). Write `note` so a future session — for a different athlete —
-    understands the mistake and what to do differently, not just what went
-    wrong for this one conversation. Every athlete's Claude session can
-    write and read this log, so keep entries genuinely general rather than
-    specific to this athlete's situation."""
+    (searchable later via research_training(domain="technical")) — call this
+    when you catch a real system-level surprise: a tool returning something
+    you didn't expect, a Garmin quirk, an exercise name that matched wrong,
+    a `kind` that landed somewhere unintended. This is NOT for the athlete's
+    own training mistakes or setbacks (that belongs in their constraints, if
+    it changes a standing rule) and NOT a place to record a scientific claim
+    (that's the research corpus, human-curated only). Write `note` so a
+    future session — for a different athlete — understands the mistake and
+    what to do differently, not just what went wrong for this one
+    conversation. Every athlete's Claude session can write and read this
+    log, so keep entries genuinely general rather than specific to this
+    athlete's situation."""
     from jim import db as _db
 
     user_id = _current_user_id()

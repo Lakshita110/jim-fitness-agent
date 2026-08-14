@@ -35,12 +35,15 @@ Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
       `skills/jim-coach/SKILL.md`, since there's no code guardrail behind MCP
       tool calls
 - [x] **M7** — Cross-user learning without self-editing the safety layer: a
-      `technical_notes` table + `get_technical_notes`/`report_technical_issue`
-      MCP tools let any session log and read back tool-usage/system mistakes
-      (a Garmin quirk, an exercise-matching miss), kept deliberately separate
-      from `research_corpus` (scientific, operator-curated only) and
-      `constraints` (one athlete's own limits). `skills/jim-coach/SKILL.md`
-      itself stays operator-edited — see CLAUDE.md's "three memory stores" note
+      `technical_notes` table + `report_technical_issue` MCP tool let any
+      session log tool-usage/system mistakes (a Garmin quirk, an
+      exercise-matching miss), read back via `research_training(domain=
+      "technical")` — folded into the existing tool rather than adding a
+      separate `get_*` one, to keep the total tool count down (17, not 18).
+      Kept deliberately separate (data-wise) from `research_corpus`
+      (scientific, operator-curated only) and `constraints` (one athlete's
+      own limits). `skills/jim-coach/SKILL.md` itself stays operator-edited
+      — see CLAUDE.md's "three memory stores" note
 
 Intensity is steered by a readiness read (acute:chronic workload ratio +
 recovery → push/steady/ease/rest, `tools/history.py`), surfaced to the model
