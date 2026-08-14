@@ -1,67 +1,13 @@
-"""cleanup_stale_adaptations — sweeps one-off Garmin workouts (see coach.py's
-_push_one and the "jim_created_workouts" kv entry) whose day has passed and
-were never promoted into the playbook.
-
-cleanup_adapted_workouts is the MCP path's equivalent — same idea, but with
-no kv bookkeeping to read (Claude creates workouts directly, with nothing
-recording that it did), so it sweeps by reading Garmin's own scheduled-
-workouts calendar for the ADAPTED_WORKOUT_PREFIX marker instead."""
+"""cleanup_adapted_workouts: sweeps one-off Garmin workouts Claude created via
+mcp_server.create_or_update_workout, by reading Garmin's own scheduled-
+workouts calendar for the ADAPTED_WORKOUT_PREFIX marker on past-dated items —
+there's no Jim-side record of having created them, so Garmin's calendar is
+the only source of truth."""
 
 from datetime import date
 
-import jim.db as db
 import jim.tools.garmin as garmin_mod
-from jim.jobs.nightly import cleanup_adapted_workouts, cleanup_stale_adaptations
-
-
-def test_deletes_past_dated_entries_and_leaves_future_ones(monkeypatch):
-    store = {
-        (1, "jim_created_workouts"): {
-            "2026-07-01": {"workout_id": "aaa", "template_key": "full_body_a"},
-            "2026-07-20": {"workout_id": "bbb", "template_key": None},
-        }
-    }
-    monkeypatch.setattr(db, "kv_get", lambda uid, key: store.get((uid, key)))
-    monkeypatch.setattr(db, "kv_set", lambda uid, key, value: store.__setitem__((uid, key), value))
-    deleted = []
-    monkeypatch.setattr("jim.tools.garmin.delete_garmin_workout",
-                        lambda uid, wid: deleted.append(wid))
-
-    cleanup_stale_adaptations(1, date(2026, 7, 10))
-
-    assert deleted == ["aaa"]
-    remaining = store[(1, "jim_created_workouts")]
-    assert set(remaining) == {"2026-07-20"}
-
-
-def test_a_delete_failure_leaves_the_entry_for_retry(monkeypatch):
-    store = {
-        (1, "jim_created_workouts"): {
-            "2026-07-01": {"workout_id": "aaa", "template_key": None},
-        }
-    }
-    monkeypatch.setattr(db, "kv_get", lambda uid, key: store.get((uid, key)))
-    monkeypatch.setattr(db, "kv_set", lambda uid, key, value: store.__setitem__((uid, key), value))
-
-    def boom(uid, wid):
-        raise RuntimeError("garmin down")
-
-    monkeypatch.setattr("jim.tools.garmin.delete_garmin_workout", boom)
-
-    cleanup_stale_adaptations(1, date(2026, 7, 10))
-
-    remaining = store[(1, "jim_created_workouts")]
-    assert remaining == {"2026-07-01": {"workout_id": "aaa", "template_key": None}}
-
-
-def test_no_entries_is_a_noop(monkeypatch):
-    monkeypatch.setattr(db, "kv_get", lambda uid, key: None)
-    calls = []
-    monkeypatch.setattr(db, "kv_set", lambda uid, key, value: calls.append(value))
-
-    cleanup_stale_adaptations(1, date(2026, 7, 10))
-
-    assert calls == [{}]
+from jim.jobs.nightly import cleanup_adapted_workouts
 
 
 def test_cleanup_adapted_workouts_deletes_only_prefixed_past_items(monkeypatch):

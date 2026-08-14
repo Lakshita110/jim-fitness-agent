@@ -2,8 +2,9 @@
 
 Vercel serves the JSON API, Neon is the database, and Vercel Cron runs the
 nightly job. About 15 minutes end to end. This is a backend-only deploy — no
-HTML/frontend ships from this repo; whatever client you build talks to the
-API described in `docs/chat.md`.
+HTML/frontend ships from this repo. The coaching surface is the Garmin MCP
+server at `/mcp` (`src/jim/mcp_server.py`, `skills/jim-coach/SKILL.md`); the
+`/auth/*` and `/settings/garmin/*` JSON routes below are for account setup.
 
 ```
 API + cron  ──▶ Vercel (serverless, api/index.py)
@@ -132,21 +133,19 @@ from the Vercel/Neon dashboard):
 ```bash
 DATABASE_URL="postgres://…neon…" python scripts/backfill.py 90
 DATABASE_URL="postgres://…neon…" python scripts/seed_corpus.py
-DATABASE_URL="postgres://…neon…" python -c "from jim.db import kv_set; kv_set('state', None)"
 ```
-
-That last line clears the cached state snapshot — without it the cards keep
-showing stale "no data" for up to an hour.
 
 ## 7. Sign in and talk to it
 
 `POST https://<your-app>.vercel.app/auth/signup` (or `/auth/login` — see
 `scripts/backfill_users.py` for creating the original athlete's account from
-the credentials already in Vercel's env vars) to get a session cookie. A
-successful sign-in sets an httpOnly session cookie (~13 months), so a client
-only ever logs in once; every `/chat/*` and `/settings/garmin/*` request
-after that authenticates with the cookie. See `docs/chat.md` for the full
-endpoint list.
+the credentials already in Vercel's env vars) to get a session cookie plus a
+bearer token. The cookie authenticates browser-side `/settings/garmin/*`
+requests; the bearer token is for an MCP-capable client (e.g. Claude) to
+point at `https://<your-app>.vercel.app/mcp` with
+`Authorization: Bearer <token>` (or `?token=<token>` on the connector URL) —
+that's the actual coaching surface. See `src/jim/mcp_server.py` and
+`skills/jim-coach/SKILL.md`.
 
 > **Your password is the only thing protecting your account.** Anyone who signs in
 > can talk to Jim and push workouts to your watch. To invalidate every session

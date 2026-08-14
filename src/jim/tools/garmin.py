@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 from jim.schemas import ActivitySummary, GarminToday, StructuredSession, WorkoutRef
 
 if TYPE_CHECKING:
-    from jim.playbook import Exercise, WorkoutTemplate
     from jim.tools.exercise_match import Resolver
 
 log = logging.getLogger(__name__)
@@ -665,59 +664,10 @@ def build_strength_payload(
     return _wrap_payload(session.title, session.kind, steps)
 
 
-def build_template_payload(
-    template: "WorkoutTemplate", resolver: "Resolver | None" = None
-) -> dict[str, Any]:
-    """Garmin workout-API JSON for a playbook template (warmup + all blocks).
-
-    Block-level `sets` (strength supersets) wrap the whole block in a repeat;
-    exercise-level `sets` wrap a single move. Used to materialize PT/base
-    routines that don't yet exist as Garmin workouts (e.g. home PT)."""
-    exercises = [*template.warmup, *(e for b in template.blocks for e in b.exercises)]
-    classified = classify_all([e.name for e in exercises], resolver)
-    steps: list[dict[str, Any]] = []
-    order = 1
-    for ex in template.warmup:
-        emitted, order = _emit_step(
-            order, name=ex.name, sets=ex.sets or 1, reps=ex.reps,
-            time_sec=ex.time_sec, weight_kg=None, classified=classified,
-        )
-        steps.extend(emitted)
-    for block in template.blocks:
-        block_steps: list[dict[str, Any]] = []
-        for ex in block.exercises:
-            emitted, order = _emit_step(
-                order, name=ex.name, sets=ex.sets or 1, reps=ex.reps,
-                time_sec=ex.time_sec, weight_kg=None, classified=classified,
-            )
-            block_steps.extend(emitted)
-        if block.sets and block.sets > 1:
-            group = {
-                "type": "RepeatGroupDTO",
-                "stepOrder": block_steps[0]["stepOrder"],
-                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
-                "numberOfIterations": block.sets,
-                "smartRepeat": False,
-                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
-                "endConditionValue": block.sets,
-                "workoutSteps": block_steps,
-            }
-            steps.append(group)
-        else:
-            steps.extend(block_steps)
-    return _wrap_payload(template.label, template.sport, steps)
-
-
-_SPORT_KEY_BY_GARMIN: dict[str, str] = {
-    "strength_training": "strength",
-    "mobility": "mobility",
-}
-
-
 def list_garmin_workouts(user_id: int) -> list[dict[str, str]]:
-    """The athlete's existing Garmin workout library — for importing a real
-    workout into the playbook instead of hand-typing one. `get_workouts`
-    paginates; 200 covers any real athlete's library in one round trip."""
+    """The athlete's existing Garmin workout library (named workouts they or
+    Jim have saved). `get_workouts` paginates; 200 covers any real athlete's
+    library in one round trip."""
     api = client(user_id)
     raw = api.get_workouts(start=0, limit=200) or []
     return [
@@ -735,82 +685,6 @@ def get_garmin_workout_detail(user_id: int, workout_id: str) -> dict[str, Any]:
     returns name/id/sport."""
     api = client(user_id)
     return api.get_workout_by_id(workout_id)
-
-
-def _humanize_exercise_name(raw: str | None) -> str | None:
-    if not raw:
-        return None
-    return raw.replace("_", " ").strip().title()
-
-
-def _step_dose(step: Mapping[str, Any]) -> tuple[int | None, int | None]:
-    """(reps, time_sec) from an ExecutableStepDTO's end condition — the
-    reverse of the encoding `_emit_step` writes."""
-    cond = (step.get("endCondition") or {}).get("conditionTypeKey")
-    value = step.get("endConditionValue")
-    if cond == "reps":
-        return (int(value) if value is not None else None), None
-    if cond == "time":
-        return None, (int(value) if value is not None else None)
-    return None, None
-
-
-def _exercise_from_step(step: Mapping[str, Any], sets: int) -> "Exercise":
-    """A playbook `Exercise` from one raw ExecutableStepDTO. Jim's own steps
-    carry a `description`; organic Garmin workouts (built on the watch or in
-    Garmin Connect) instead carry `exerciseName`/`category` — fall back
-    through both before giving up on a name."""
-    from jim.playbook import Exercise
-
-    reps, time_sec = _step_dose(step)
-    name = (
-        step.get("description")
-        or _humanize_exercise_name(step.get("exerciseName"))
-        or _humanize_exercise_name(step.get("category"))
-        or "Unknown exercise"
-    )
-    return Exercise(name=name, sets=sets if sets > 1 else None, reps=reps, time_sec=time_sec)
-
-
-def parse_workout_to_template(key: str, raw: Mapping[str, Any]) -> "WorkoutTemplate":
-    """The reverse of `build_template_payload`: turn a raw Garmin workout (from
-    `get_garmin_workout_detail`) into a playbook `WorkoutTemplate`, so an
-    athlete's real watch library can be imported rather than hand-typed.
-
-    Warmup steps (stepTypeKey == "warmup") land in `template.warmup`; every
-    other step lands in one flat block — Garmin's JSON doesn't carry the
-    playbook's named block grouping, so a faithful reconstruction of names/
-    doses/order is the best import can do. The athlete can regroup by hand
-    afterward in the playbook editor."""
-    from jim.playbook import Block, WorkoutTemplate
-
-    sport_key = (raw.get("sportType") or {}).get("sportTypeKey", "")
-    sport = _SPORT_KEY_BY_GARMIN.get(sport_key, "strength")
-    segments = raw.get("workoutSegments") or []
-    steps = segments[0].get("workoutSteps") if segments else []
-
-    warmup = []
-    exercises = []
-    for step in steps or []:
-        if step.get("type") == "RepeatGroupDTO":
-            inner = (step.get("workoutSteps") or [{}])[0]
-            sets = int(step.get("numberOfIterations") or 1)
-            step_type_key = (inner.get("stepType") or {}).get("stepTypeKey")
-            ex = _exercise_from_step(inner, sets)
-        else:
-            step_type_key = (step.get("stepType") or {}).get("stepTypeKey")
-            ex = _exercise_from_step(step, 1)
-        (warmup if step_type_key == "warmup" else exercises).append(ex)
-
-    workout_id = raw.get("workoutId")
-    return WorkoutTemplate(
-        key=key,
-        label=raw.get("workoutName") or key,
-        garmin_workout_id=str(workout_id) if workout_id else None,
-        sport=sport,
-        warmup=warmup,
-        blocks=[Block(exercises=exercises)] if exercises else [],
-    )
 
 
 def create_garmin_workout(user_id: int, session: StructuredSession) -> WorkoutRef:
@@ -837,8 +711,9 @@ def schedule_workout(user_id: int, workout_id: str, on: date) -> None:
 
 def delete_garmin_workout(user_id: int, workout_id: str) -> None:
     """Remove a one-off adaptation from the athlete's workout library once
-    it's no longer needed (superseded by a repush, or its day has passed
-    unpromoted). See jim_created_workouts tracking in coach.py/jobs/nightly.py."""
+    it's no longer needed (superseded by a repush, or its scheduled day has
+    passed). See jobs/nightly.cleanup_adapted_workouts, and
+    mcp_server.cleanup_old_adapted_workouts for the on-demand equivalent."""
     api = client(user_id)
     api.delete_workout(workout_id)
     log.info("deleted garmin workout %s", workout_id)

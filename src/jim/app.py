@@ -1,14 +1,15 @@
-"""Thin FastAPI service (PLAN.md §5): health check and nightly housekeeping cron.
+"""Thin FastAPI service: health check and nightly housekeeping cron.
 
 Deployed on Vercel as a single serverless function (api/index.py), so the nightly
 job is exposed here as /api/cron/nightly for Vercel Cron to ping, and migrations
 are ensured on the request path rather than at startup (see db.ensure_migrated).
 
-Routes live in jim.web.*_routes, grouped by concern (auth, chat, playbook,
-garmin onboarding); this module wires them together plus health/cron, too small
-to warrant their own file. Also mounts the Garmin MCP server (mcp_server.py) at
-/mcp — that's the actual coach surface now; the JSON routes below it are for
-auth/settings/legacy chat, no HTML anywhere."""
+Routes live in jim.web.*_routes, grouped by concern (auth, garmin onboarding,
+constraints); this module wires them together plus health/cron, too small to
+warrant their own file. The actual coach surface is the Garmin MCP server
+(mcp_server.py), mounted here at /mcp — Claude is the reasoning engine, talking
+to Garmin through it directly. The JSON routes below it are for auth/settings
+only; no HTML anywhere."""
 
 import hmac
 import logging
@@ -19,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from jim.config import settings
 from jim.mcp_server import build_asgi_app
-from jim.web import auth_routes, chat_routes, constraints_routes, garmin_routes, playbook_routes
+from jim.web import auth_routes, constraints_routes, garmin_routes
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +53,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="jim", lifespan=lifespan)
 app.mount("/mcp", mcp_app)
 app.include_router(auth_routes.router)
-app.include_router(chat_routes.router)
-app.include_router(playbook_routes.router)
 app.include_router(garmin_routes.router)
 app.include_router(constraints_routes.router)
 

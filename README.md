@@ -1,17 +1,19 @@
 # Jim
 
 A personal training agent, multi-tenant — each signed-up account (email +
-password) connects its own Garmin and edits its own playbook. Plans come from
-talking to **Jim's chat** via its JSON API — the athlete (through whatever
-client talks to that API) reasons with Jim about the next session within
-their joint constraints (using real Garmin history), iterates on the plan (or
-the whole week), keeps long-term goals in plain language, and pushes to
-Garmin with one call.
-Nightly housekeeping keeps that history fresh (Garmin sync, adherence
-reconcile, stale-workout cleanup) but never writes a plan itself.
+password) connects its own Garmin. Claude is the reasoning engine: it talks
+to Garmin directly through a Garmin MCP server (`src/jim/mcp_server.py`,
+mounted at `/mcp`), reading real history/readiness and writing structured
+workouts, reasoning about the next session within that athlete's knee/ankle
+constraints — see `skills/jim-coach/SKILL.md` for how it's meant to use those
+tools; there's no code-enforced guardrail behind them, so that skill is the
+safety layer. Nightly housekeeping keeps history fresh (Garmin sync,
+adherence reconcile, stale-workout cleanup) but never writes a plan itself,
+and nothing reaches the watch except through an explicit write-tool call.
 
 This is a backend-only API — no HTML/frontend is included in this repo. A UI
-is expected to be built separately against the endpoints below.
+is expected to be built separately against the endpoints below, and an
+MCP-capable client (Claude, via a connector) is the coaching surface.
 
 Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 [docs/architecture.md](docs/architecture.md). Milestone status:
@@ -19,47 +21,45 @@ Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 - [x] **M1** — Garmin write round-trip: verified server-side + on-watch
       (docs/garmin_strength.md, exercise taxonomy verified against Garmin's own)
 - [x] **M2** — State layer as tools (`jim/tools/`, fixture-tested, `scripts/backfill.py`)
-- [x] **M3** — Chat-driven planning, propose-only (`jim/coach.py`) + nightly housekeeping
-- [x] **M4** — Gated research (`jim/tools/research.py`), reached via chat's lookup rounds
-- [ ] **M5** — Eval suite gating `AUTO_PUSH` — not started; needs a chat-turn eval shape
-      (the old nightly-auto-compose scaffold was retired along with that code path)
+- [x] **M3** — Chat-driven planning, propose-only, + nightly housekeeping (retired,
+      see M6)
+- [x] **M4** — Gated research (`jim/tools/research.py`), reached via the old chat
+      loop's lookup rounds. Not currently exposed as an MCP tool — see
+      CLAUDE.md's Unresolved section
+- [x] **M6** — Garmin MCP server (`src/jim/mcp_server.py`) so Claude can be the
+      coach directly, reasoning against real Garmin reads/writes. Verified
+      end-to-end; the old `coach.py`/`playbook.py`/`agent/validate.py` chat path
+      it replaced has been removed. Safety now lives in
+      `skills/jim-coach/SKILL.md`, since there's no code guardrail behind MCP
+      tool calls
 
-Interactive surface: **the chat API** (docs/chat.md). Memory model incl.
-long-term goals: docs/memory.md. Intensity is steered by a readiness read
-(acute:chronic workload ratio + recovery → push/steady/ease/rest,
-`tools/history.py`).
+Intensity is steered by a readiness read (acute:chronic workload ratio +
+recovery → push/steady/ease/rest, `tools/history.py`), surfaced to the model
+via `get_readiness`.
 
 ## Layout
 
 ```
 src/jim/
-  config.py          # constants + guardrail bounds + env-backed secrets
+  config.py          # constants + env-backed secrets
   schemas.py         # typed tool contracts, incl. StructuredSession
   db.py              # Postgres + idempotent migrations + kv store (composite user_id, key)
-  migrations/        # additive, idempotent SQL (001-009); ships inside the package
-  auth.py            # email+password signup/login, session cookies, _require_user
+  migrations/        # additive, idempotent SQL (001-012); ships inside the package
+  auth.py            # email+password signup/login, session cookies + bearer tokens, _require_user
   crypto.py          # AES-GCM encrypt/decrypt for Garmin creds at rest
-  tools/             # garmin, history, research (gated), memory
-  agent/
-    validate.py      # hard safety guardrail + advisory balance + fallback (used by coach.py)
+  tools/             # garmin, history, research (gated), memory, exercise_match
   jobs/              # nightly.py (per-user sync + reconcile + cleanup, fanned out; no planning)
                       #   + reconcile.py
-  playbook.py        # per-account playbook (Postgres JSONB); disk YAML is the signup seed
-  coach.py           # Jim's chat: composes drafts, goals memory, approve -> Garmin
-  app.py             # FastAPI app + health, /api/cron/nightly — wires in web/
-  web/               # route groups (JSON only): auth, chat, playbook, garmin onboarding, deps
+  mcp_server.py       # Garmin MCP — read history/readiness/calendar/library, write/schedule, constraints
+  app.py             # FastAPI app + health, /api/cron/nightly, mounts /mcp — wires in web/
+  web/               # route groups (JSON only): auth, garmin onboarding, constraints, deps
 api/index.py         # Vercel entrypoint — re-exports app.app as the ASGI handler
-playbook/            # editable memory: base_workouts.yaml (workout library + rotation), directives.md
+skills/jim-coach/    # operating instructions for Claude when it's the coach calling MCP tools
 data/corpus/         # curated research corpus (seeded by scripts/seed_corpus.py)
-docs/                # architecture, chat, memory, garmin_strength
-scripts/             # m1_roundtrip.py, backfill.py, backfill_users.py, garmin_login.py, seed_corpus.py
+docs/                # architecture, garmin_strength
+scripts/             # backfill.py, backfill_users.py, garmin_login.py, seed_corpus.py, exercise_map.py, refresh_garmin_exercises.py
 tests/               # offline only — recorded fixtures, no live APIs
 ```
-
-The guardrail (`agent/validate.py`) splits in two: **hard** rules reject a day
-(forbidden movements, session length, Garmin's step cap, leg-day spacing) and
-**advisory** balance notes tell the coach when the plan is skewed across
-legs/push/pull/core/conditioning. There is deliberately no weekly volume cap.
 
 ## Setup
 
@@ -80,9 +80,14 @@ pytest
 
 ```bash
 python -m jim.jobs.nightly        # nightly housekeeping: sync + reconcile + cleanup
-uvicorn jim.app:app --reload      # local service; JSON API at /auth, /chat, /api/playbook, /settings/garmin
+uvicorn jim.app:app --reload      # local service; JSON API at /auth, /api/*, /settings/garmin, MCP at /mcp
 python scripts/backfill.py 90     # backfill Garmin history into Postgres
 ```
+
+`POST /auth/signup` or `/auth/login` returns both a session cookie and a
+bearer token; point an MCP-capable client at `/mcp` with
+`Authorization: Bearer <token>` (or `?token=<token>` on the connector URL) to
+talk to Jim as the coach.
 
 ## Deploy
 

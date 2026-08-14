@@ -1,44 +1,13 @@
 """Runtime configuration. Secrets come from env vars (see .env.example); the
-behavioural constants from PLAN.md §8 live here so they are grep-able and
-version-controlled."""
+behavioural constants used across the codebase live here so they are
+grep-able and version-controlled."""
 
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# --- PLAN.md §8 constants -------------------------------------------------
-MODEL_FAST = "openai/gpt-4o-mini"  # cheap OpenRouter tier — default agent + compose
-MODEL_QUALITY = "anthropic/claude-sonnet-4"  # escalation only, on ambiguous state
-MAX_TOOL_CALLS = 10  # hard cap per nightly run (reads + gated research + compose ×2)
-RESEARCH_ENABLED = True  # gated behind off-heuristic regardless
-AUTO_PUSH = False  # propose-only until M5 evals pass
-CRON_LOCAL_HOUR = 21
-
+MODEL_FAST = "openai/gpt-4o-mini"  # cheap OpenRouter tier — research.py + exercise_match.py
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
-# --- Guardrail bounds (validate.py) ---------------------------------------
-# Hard rules are SAFETY only — they reject a day. Everything else (balance) is
-# advice fed back to the coach: an unbalanced week is suboptimal, not dangerous,
-# and silently dropping days is worse than letting a skewed plan through.
-GARMIN_MAX_STEPS = 50  # Garmin rejects workouts beyond ~50 steps
-MAX_SESSION_MIN = 120  # a day's cap; there is deliberately no weekly volume cap
-
-# Balance targets (advisory). Measured across LOADING work only — mobility/PT is
-# meant to happen daily and would otherwise swamp the split.
-BALANCE_GROUPS = ("legs", "push", "pull", "core", "conditioning")
-BALANCE_MAX_SHARE = 0.50  # no single group should own more than half the plan
-BALANCE_MIN_SESSIONS = 3  # fewer loading days than this is too short to judge
-# Movements that violate current knee/ankle constraints. Lowercase substrings
-# matched against exercise names. Extend as PT protocol evolves.
-FORBIDDEN_EXERCISES = (
-    "depth jump",
-    "box jump",
-    "jump squat",
-    "pistol squat",
-    "plyo",
-    "sprint",
-)
-MIN_DAYS_BETWEEN_LEG_SESSIONS = 2
 
 
 class Settings(BaseSettings):

@@ -151,22 +151,6 @@ def test_overrides_beat_the_nearest_name_when_it_is_the_wrong_movement():
     assert classify_garmin_exercise("Banded eversion") == ("CALF_RAISE", None)
 
 
-def test_every_playbook_exercise_reaches_a_garmin_exercise():
-    """The bug this guards: an unmatched movement lands on the watch as a bare
-    note — no exercise, no animation, no set logging."""
-    from jim.playbook import _load_playbook_from_disk
-
-    playbook = _load_playbook_from_disk()
-    templates = list(playbook.workouts.values())
-    names = {
-        exercise.name
-        for template in templates
-        for exercise in [*template.warmup, *(e for b in template.blocks for e in b.exercises)]
-    }
-    unmapped = [name for name in names if classify_garmin_exercise(name)[0] is None]
-    assert not unmapped
-
-
 def test_every_mapping_is_a_pair_garmin_will_accept():
     """category must be a real category and exerciseName one of ITS exercises —
     an invented pair is a live 400 ("Invalid category") or a silently dropped
@@ -182,22 +166,3 @@ def test_every_mapping_is_a_pair_garmin_will_accept():
         assert exercise is None or exercise in valid[category], (
             f"{needle}: {exercise} is not an exercise in {category}"
         )
-
-
-def test_build_template_payload_from_playbook_home_pt():
-    from jim.playbook import _load_playbook_from_disk
-    from jim.tools.garmin import build_template_payload
-
-    home = _load_playbook_from_disk().workouts["pt_home"]
-    payload = build_template_payload(home)
-    assert payload["sportType"]["sportTypeKey"] == "mobility"
-    steps = payload["workoutSegments"][0]["workoutSteps"]
-    # warmup (single, flat) + several exercises, multi-set ones wrapped in repeats
-    assert any(s["type"] == "RepeatGroupDTO" for s in steps)
-    # priority ankle eversion is present (by description) and repeated 3x
-    everts = [
-        s for s in steps
-        if s.get("type") == "RepeatGroupDTO"
-        and "eversion" in s["workoutSteps"][0]["description"].lower()
-    ]
-    assert everts and everts[0]["numberOfIterations"] == 3

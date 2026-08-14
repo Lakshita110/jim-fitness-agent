@@ -1,7 +1,7 @@
 """One-off (soft-baking-kettle plan, Phase 2 backfill): create the existing
-athlete's `users` row and populate their `user_credentials`/`playbooks` rows
-from what's already in the environment/committed files, so the one real user
-isn't locked out once the CHAT_SECRET auth path is removed.
+athlete's `users` row and populate their `user_credentials` row from what's
+already in the environment, so the one real user isn't locked out once the
+CHAT_SECRET auth path is removed.
 
     python scripts/backfill_users.py [email] [--password PW]
 
@@ -12,13 +12,11 @@ rather than silently duplicating the account.
 
 import argparse
 import getpass
-import json
 import sys
 
 from jim import auth, crypto
 from jim.config import settings
 from jim.db import connect, migrate
-from jim.playbook import _load_playbook_from_disk
 
 # Tables carrying a nullable user_id (007_users.sql) that must be backfilled
 # before 008_user_pks.sql can promote it into a composite primary key.
@@ -63,18 +61,6 @@ def main() -> None:
                 user.id,
             ),
         )
-
-        pb = _load_playbook_from_disk()
-        conn.execute(
-            "UPDATE playbooks SET rotation = %s, workouts = %s,"
-            " directives = %s, updated_ts = now() WHERE user_id = %s",
-            (
-                json.dumps(pb.rotation),
-                json.dumps({k: v.model_dump(mode="json") for k, v in pb.workouts.items()}),
-                pb.directives,
-                user.id,
-            ),
-        )
         conn.commit()
 
     # Backfill user_id onto this athlete's existing historical rows so
@@ -105,8 +91,6 @@ def main() -> None:
         )
         or "  credentials: none found in env"
     )
-    print(f"  playbook: {len(pb.rotation)} rotation slots, {len(pb.workouts)} workouts, "
-          f"{'directives set' if pb.directives else 'no directives'}")
     print("Sign in at /login with the email/password you just entered.")
 
 
