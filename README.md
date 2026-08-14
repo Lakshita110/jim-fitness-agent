@@ -23,9 +23,11 @@ Architecture: **[CLAUDE.md](CLAUDE.md)** (start here) and
 - [x] **M2** — State layer as tools (`jim/tools/`, fixture-tested, `scripts/backfill.py`)
 - [x] **M3** — Chat-driven planning, propose-only, + nightly housekeeping (retired,
       see M6)
-- [x] **M4** — Gated research (`jim/tools/research.py`), reached via the old chat
-      loop's lookup rounds. Not currently exposed as an MCP tool — see
-      CLAUDE.md's Unresolved section
+- [x] **M4** — Gated research (`jim/tools/research.py`): pgvector corpus search
+      + domain-restricted Tavily, now exposed as the `research_training` MCP
+      tool. Corpus is shared across every athlete (general training science,
+      not any one athlete's protocol) and has a handful of seed docs; fuller
+      curation is ongoing — see `data/corpus/README.md`
 - [x] **M6** — Garmin MCP server (`src/jim/mcp_server.py`) so Claude can be the
       coach directly, reasoning against real Garmin reads/writes. Verified
       end-to-end; the old `coach.py`/`playbook.py`/`agent/validate.py` chat path

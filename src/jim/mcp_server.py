@@ -374,6 +374,32 @@ def cleanup_old_adapted_workouts(lookback_days: int = 30) -> dict:
     return {"ok": True}
 
 
+# --- research: grounded fitness/training-science lookups ---------------------
+
+
+@mcp.tool
+def research_training(question: str) -> list[dict]:
+    """Look up grounded, source-cited training-science snippets for a
+    question that needs more than opinion — e.g. "how should I load an
+    irritated patellar tendon" or "how much weekly volume before overtraining
+    risk goes up." Searches a curated corpus first (vetted articles, clinical
+    practice guidelines, PT protocols), then tops up with a domain-restricted
+    web search if the corpus doesn't have enough on that topic.
+
+    This is general training science shared across every athlete Jim
+    coaches, not this athlete's specifics — always combine it with
+    get_constraints for whatever actually applies to the person you're
+    talking to right now. Each hit carries a `source` so you can cite it
+    rather than presenting it as your own claim. May return an empty list if
+    nothing relevant is in the corpus and the web search also comes up dry —
+    that's a real answer, not a failure, and you should say so rather than
+    inventing a citation."""
+    from jim.tools.research import research_training as _research
+
+    _current_user_id()  # require sign-in, same as every other tool
+    return [hit.model_dump(mode="json") for hit in _research(question)]
+
+
 # --- constraints: the one remaining piece of Jim-side memory -----------------
 
 

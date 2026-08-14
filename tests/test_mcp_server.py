@@ -100,6 +100,31 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
         assert write_result.data == {"ok": True}
         assert writes == [(303, "no jump squats")]
 
+        # research_training requires auth like every other tool, and is not
+        # keyed by user_id — it's the shared corpus, not per-athlete data.
+        async with _asgi_client() as c:
+            with pytest.raises(ToolError, match="missing token"):
+                await c.call_tool("research_training", {"question": "irrelevant"})
+
+        import jim.tools.research as research_mod
+        from jim.schemas import ResearchHit
+
+        questions_asked = []
+
+        def fake_research(question, k=5):
+            questions_asked.append(question)
+            return [ResearchHit(source="corpus.md", title="A title", snippet="snip", score=0.9)]
+
+        monkeypatch.setattr(research_mod, "research_training", fake_research)
+        async with _asgi_client({"Authorization": f"Bearer {token_a}"}) as c:
+            result = await c.call_tool(
+                "research_training", {"question": "how to load a sore knee tendon"}
+            )
+        assert questions_asked == ["how to load a sore knee tendon"]
+        assert result.data == [
+            {"source": "corpus.md", "title": "A title", "snippet": "snip", "score": 0.9}
+        ]
+
 
 def test_normalize_kind_passes_through_the_real_values():
     for kind in (

@@ -1,6 +1,6 @@
 ---
 name: jim-coach
-description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_recent_activities, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
+description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_recent_activities, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, research_training, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
 ---
 
 # Coaching through Jim's Garmin MCP
@@ -126,7 +126,22 @@ information into the existing text, and write the combined version back.
 Only call `set_constraints` when they've actually stated a new limit, rule,
 or goal — not as routine bookkeeping.
 
-## 7. Errors are signals, not noise
+## 7. Ground a load-management judgment call in `research_training`, not just instinct
+
+When a recommendation turns on training science rather than this athlete's
+own numbers — how to load a flared-up tendon, whether to keep loading
+through pain, how much volume before overreach risk rises — call
+`research_training` with the actual question before answering from general
+knowledge alone. It searches a curated, source-cited corpus (plus a
+domain-restricted web search) and hands back citable snippets; it's general
+training science shared across every athlete, so combine it with
+`get_constraints` for what specifically applies to the person you're
+talking to, not as a replacement for it. Cite the source when you use a
+hit ("per a patellofemoral pain guideline...") rather than presenting it as
+your own claim, and say so plainly if it comes back empty — that's real
+information, not a reason to invent a citation.
+
+## 8. Errors are signals, not noise
 
 A tool error (auth failure, "not connected," a bad token) means something
 real is wrong on the athlete's end, and they're the only one who can fix
@@ -136,7 +151,7 @@ apologizing vaguely or quietly trying again. Papering over a real failure
 with generic reassurance just means the athlete finds out the push never
 happened when they check their watch later.
 
-## 8. Talk like a coach
+## 9. Talk like a coach
 
 Plain language, not a tool-call summary. The athlete wants to know what
 today should look like and why, not that you called four functions. Cite

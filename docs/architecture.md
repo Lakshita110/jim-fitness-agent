@@ -24,7 +24,8 @@ flowchart TB
         subgraph pg["Postgres"]
             USERS["users . user_credentials (Garmin,<br/>AES-GCM encrypted) . constraints"]
             KV["kv (user_id, key): state cache<br/>and other small per-user values"]
-            TABLES["garmin_daily . activities .<br/>exercise_sets (reps+kg per set) .<br/>research_corpus<br/>— all user_id-scoped"]
+            TABLES["garmin_daily . activities .<br/>exercise_sets (reps+kg per set)<br/>— all user_id-scoped"]
+            CORPUS["research_corpus: shared across every<br/>athlete, seeded from data/corpus/*.md<br/>(general training science, not per-user)"]
         end
     end
 
@@ -32,6 +33,7 @@ flowchart TB
         READS["reads: get_readiness, get_training_readiness,<br/>get_training_status, get_exercise_history,<br/>get_recent_activities, get_daily_steps,<br/>get_weigh_ins, get_scheduled_workouts,<br/>list_saved_workouts, get_saved_workout"]
         WRITES["writes: create_or_update_workout (one-off),<br/>save_to_library (permanent), schedule_workout,<br/>unschedule_day, delete_workout"]
         CONSTRAINTS["get_constraints / set_constraints<br/>(full-replace document)"]
+        RESEARCH["research_training: corpus search<br/>+ domain-restricted Tavily top-up"]
         BACKFILL["backfill_history, cleanup_old_adapted_workouts"]
     end
 
@@ -44,9 +46,10 @@ flowchart TB
     CRON -->|"sweep stale one-off<br/>adaptations"| GARMINAPI
 
     CLAUDE <--> MCPAPI
-    MCPAPI --> READS & WRITES & CONSTRAINTS & BACKFILL
+    MCPAPI --> READS & WRITES & CONSTRAINTS & RESEARCH & BACKFILL
     READS --> TABLES
     CONSTRAINTS --> USERS
+    RESEARCH --> CORPUS
     WRITES -->|"explicit ask only"| GARMINAPI
     GARMINAPI -->|"scheduled workout<br/>syncs to watch"| WATCH
 

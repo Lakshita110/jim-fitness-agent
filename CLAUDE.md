@@ -29,7 +29,7 @@ lives in `skills/jim-coach/SKILL.md` instead of a code guardrail.
 |---|---|---|
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, mounts the MCP app at `/mcp`, wires in `web/` routers | active |
-| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
+| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints, `research_training` lookups. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
 | `skills/jim-coach/SKILL.md` | Operating instructions for Claude when it's the one calling the MCP tools — constraints-first, data-grounded recommendations, never write without an explicit ask, `set_constraints` is a full replace. This is the safety layer now that there's no code guardrail | active |
 | `src/jim/web/{auth,garmin,constraints}_routes.py`, `deps.py` | Pure JSON API routes (no HTML). `auth_routes` also returns a bearer token on login/signup for non-browser clients (the MCP server) | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |
@@ -37,13 +37,13 @@ lives in `skills/jim-coach/SKILL.md` instead of a code guardrail.
 | `src/jim/tools/garmin.py` | Garmin reads/writes + workout scheduling + exercise-taxonomy matching | active |
 | `src/jim/tools/exercise_match.py` | LLM fallback for unmatched exercise names, validated against the vendored taxonomy | active |
 | `src/jim/tools/history.py` | Deterministic features + readiness read | active |
-| `src/jim/tools/research.py` | Corpus/Tavily research (`research_training`) | needs-review — not exposed as an MCP tool in `mcp_server.py`; nothing calls it now that `coach.py` is gone, see Unresolved |
+| `src/jim/tools/research.py` | Corpus/Tavily research (`research_training`) — pgvector search over `data/corpus/*`, Tavily to top up, both domain-restricted. Exposed as the `research_training` MCP tool | active |
 | `src/jim/tools/memory.py` | Suggestion/outcome recording (`record_suggestion`, `record_outcome`); used by `jobs/reconcile.py` | needs-review — nothing calls `record_suggestion` now that `coach.py` is gone, see Unresolved |
 | `src/jim/jobs/nightly.py` | Sync + reconcile + cleanup cron; never drafts a plan | active |
 | `src/jim/jobs/reconcile.py` | Matches Garmin actuals to stored suggestions | needs-review — depends on `suggestions` rows nothing currently writes, see Unresolved |
 | `src/jim/migrations/001–012_*.sql` | Additive, idempotent, never edited after applied. `012_drop_playbooks.sql` drops `007_users.sql`'s `playbooks` table now that nothing reads or writes it | active |
 | `src/jim/data/garmin_exercises.json` | Vendored Garmin exercise taxonomy | active |
-| `data/corpus/*` | Research corpus source + template | needs-review — not traced to `research.py` ingestion path this session |
+| `data/corpus/*` | Research corpus source markdown, seeded via `scripts/seed_corpus.py` into `research_corpus` (pgvector). Shared across every athlete — general training science, not any one athlete's protocol; per-athlete specifics stay in `constraints` | active |
 | `scripts/backfill_users.py` | One-off: creates the original athlete's user row, backfills `user_id` onto pre-multi-tenant rows. No longer touches a playbook. Not idempotent by design | active (one-off, already run) |
 | `scripts/backfill.py` | Repeatable ~90-day Garmin history backfill for an existing user. Idempotent | active |
 | `scripts/exercise_map.py`, `garmin_login.py`, `make_icon.py`, `refresh_garmin_exercises.py`, `seed_corpus.py` | Ops/dev utilities | needs-review — not individually verified this session |
@@ -68,14 +68,21 @@ python -m jim.jobs.nightly      # nightly housekeeping, by hand
 ```
 
 **Unresolved:**
-- `tools/memory.record_suggestion`, `tools/history.last_rotation_key`, and
-  all of `tools/research.py` (`research_training`) have no callers left now
-  that `coach.py` is gone — `mcp_server.py` exposes no research tool, and
-  the MCP path never calls `record_suggestion`, so `suggestions` gets no new
-  rows and `jobs/reconcile.py`'s adherence matching (which reads
-  `suggestions`) is effectively dark for MCP-created workouts. Whether
-  research/adherence tracking should be wired into MCP tools, or this code
-  should be retired too, wasn't decided this session — flagged rather than
-  guessed at.
-- Whether `data/corpus/*` and the five untraced `scripts/*` utilities are
-  still exercised by any current path.
+- `tools/memory.record_suggestion` and `tools/history.last_rotation_key`
+  still have no callers now that `coach.py` is gone — the MCP path never
+  calls `record_suggestion`, so `suggestions` gets no new rows and
+  `jobs/reconcile.py`'s adherence matching (which reads `suggestions`) is
+  effectively dark for MCP-created workouts. Whether adherence tracking
+  should be wired into an MCP write tool, or this code should be retired
+  too, wasn't decided this session — flagged rather than guessed at.
+- `data/corpus/*` currently has three seed documents (pain-monitoring
+  model, patellofemoral pain load management, isometric loading for tendon
+  pain) — original summaries of well-established public training-science
+  concepts, written to unblock `research_training` end-to-end, not a
+  substitute for properly curated primary sources. Whether/when to run
+  `scripts/seed_corpus.py` against the deployed DB (requires a live
+  Postgres with pgvector + `OPENROUTER_API_KEY`) wasn't done this session.
+- Whether the five untraced `scripts/*` utilities (`exercise_map.py`,
+  `garmin_login.py`, `make_icon.py`, `refresh_garmin_exercises.py`, and now
+  `seed_corpus.py` — verified this session but not yet run against a live
+  DB) are still exercised by any current path.
