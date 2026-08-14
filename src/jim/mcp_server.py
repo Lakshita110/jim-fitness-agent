@@ -248,7 +248,11 @@ def create_or_update_workout(
     workouts/list_saved_workouts, but prefer the exact names above when
     you're the one choosing. strength/mobility steps get matched against
     Garmin's exercise library (category + exerciseName); every other kind is
-    treated as a plain activity and just carries its description.
+    treated as a plain activity and just carries its description — meaning
+    for those kinds, whatever you put in `exercise` is exactly what the
+    athlete sees on their watch, verbatim, with no matching to smooth over a
+    vague name. Write it like a real step ("Easy run", "Brisk walk", "Tempo
+    intervals"), not a placeholder like "Go" or "Exercise".
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,

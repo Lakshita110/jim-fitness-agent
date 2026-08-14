@@ -107,6 +107,15 @@ but reach for the exact names above when you're the one choosing.
 ("hiking" has no dedicated Garmin sportType and lands on Garmin as "other"
 — that's expected, not a bug.)
 
+Every step's `exercise` field becomes what the athlete actually sees on
+their watch. For strength/mobility it's matched against Garmin's exercise
+library, so a rough name still resolves to something real — but for every
+other kind (running, walking, conditioning, ...) there's no matching step,
+so whatever string you send is shown verbatim. Write it like a real step
+name — "Easy run", "Tempo intervals", "Brisk walk" — never a vague
+placeholder like "Go" or "Exercise"; the athlete would see that exact word
+on their wrist mid-workout.
+
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 
 There's no merge behavior: whatever you send becomes the entire constraints
