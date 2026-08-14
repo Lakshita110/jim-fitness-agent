@@ -181,13 +181,6 @@ def get_daily_steps(user_id: int, start: date, end: date) -> list[dict]:
     return api.get_daily_steps(start.isoformat(), end.isoformat()) or []
 
 
-def get_weigh_ins(user_id: int, start: date, end: date) -> dict:
-    """Logged bodyweight entries for [start, end] (whatever the athlete or a
-    connected smart scale has recorded in Garmin Connect)."""
-    api = client(user_id)
-    return api.get_weigh_ins(start.isoformat(), end.isoformat()) or {}
-
-
 def backfill_if_empty(user_id: int, today: date, days: int = 90) -> None:
     """First-ever real Garmin data for this user: garmin_daily has zero
     rows, so query_history/readiness_read would have nothing to work with
