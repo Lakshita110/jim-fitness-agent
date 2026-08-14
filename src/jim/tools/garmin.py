@@ -526,19 +526,20 @@ SPORT_TYPES: dict[str, dict[str, Any]] = {
 _TAXONOMY_CLASSIFIED_KINDS = {"strength", "mobility"}
 
 
-def _emit_step(
+def _build_entry(
     order: int,
     *,
     name: str,
-    sets: int,
     reps: int | None,
     time_sec: int | None,
     weight_kg: float | None,
     classified: Mapping[str, tuple[str | None, str | None]] | None = None,
     classify: bool = True,
-) -> tuple[list[dict[str, Any]], int]:
-    """Build one executable step (wrapped in a RepeatGroupDTO when sets>1),
-    encoding the hard-won Garmin quirks (see docs/garmin_strength.md).
+) -> tuple[dict[str, Any], int]:
+    """Build one bare ExecutableStepDTO (not wrapped in any repeat block) —
+    the shared building block both a single exercise's own repeat and a
+    multi-exercise superset's shared repeat are made of. See _emit_step and
+    _emit_superset for the two ways this gets wrapped.
 
     Condition type IDs: 2 = time, 7 = iterations, 10 = reps — numeric id is
     mandatory; the value goes in step-level endConditionValue.
@@ -564,7 +565,6 @@ def _emit_step(
         "endConditionValue": end_value,
         "description": name,
     }
-    order += 1
     if weight_kg is not None:
         entry["weightValue"] = weight_kg
         entry["weightUnit"] = {"unitKey": "kilogram"}
@@ -574,7 +574,29 @@ def _emit_step(
             entry["category"] = category
         if exercise_name:
             entry["exerciseName"] = exercise_name
+    return entry, order + 1
 
+
+def _emit_step(
+    order: int,
+    *,
+    name: str,
+    sets: int,
+    reps: int | None,
+    time_sec: int | None,
+    weight_kg: float | None,
+    classified: Mapping[str, tuple[str | None, str | None]] | None = None,
+    classify: bool = True,
+) -> tuple[list[dict[str, Any]], int]:
+    """One exercise, wrapped in its own RepeatGroupDTO when sets>1 —
+    Garmin's format for "Wall sit x5" as a single block, one exercise. For a
+    superset (two-plus exercises sharing one round count), see
+    _emit_superset instead; a repeat block wrapping only one exercise can't
+    express that."""
+    entry, order = _build_entry(
+        order, name=name, reps=reps, time_sec=time_sec, weight_kg=weight_kg,
+        classified=classified, classify=classify,
+    )
     if sets > 1:
         group = {
             "type": "RepeatGroupDTO",
@@ -589,6 +611,47 @@ def _emit_step(
         order += 1
         return [group], order
     return [entry], order
+
+
+def _emit_superset(
+    order: int,
+    steps: list[Any],
+    *,
+    classified: Mapping[str, tuple[str | None, str | None]] | None = None,
+    classify: bool = True,
+) -> tuple[list[dict[str, Any]], int]:
+    """Two-plus exercises sharing ONE round count, wrapped in a single
+    RepeatGroupDTO — "Round 1/3: Wall sit -> Row" as one grouped unit on the
+    watch. This is Garmin's only way to express a superset: the repeat block
+    itself doesn't care how many ExecutableStepDTOs it wraps, only
+    _emit_step's single-exercise usage ever wrapped just one.
+
+    `steps` must be ExerciseStep-like (has .exercise/.reps/.duration_sec/
+    .weight_kg/.sets) and share superset_group already — the caller
+    (build_strength_payload) is responsible for clustering. All steps must
+    agree on `sets` (the shared round count); the first step's value wins if
+    they don't, since Garmin has exactly one iteration count per block."""
+    rounds = steps[0].sets
+    group_order = order
+    order += 1  # the group itself takes this slot; each exercise gets the next ones
+    entries: list[dict[str, Any]] = []
+    for step in steps:
+        entry, order = _build_entry(
+            order, name=step.exercise, reps=step.reps, time_sec=step.duration_sec,
+            weight_kg=step.weight_kg, classified=classified, classify=classify,
+        )
+        entries.append(entry)
+    group = {
+        "type": "RepeatGroupDTO",
+        "stepOrder": group_order,
+        "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
+        "numberOfIterations": rounds,
+        "smartRepeat": False,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": rounds,
+        "workoutSteps": entries,
+    }
+    return [group], order
 
 
 def _wrap_payload(name: str, sport_key: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
@@ -649,19 +712,46 @@ def build_strength_payload(
     classified = classify_all([s.exercise for s in session.steps], resolver) if classify else {}
     steps: list[dict[str, Any]] = []
     order = 1
-    for step in session.steps:
-        emitted, order = _emit_step(
-            order,
-            name=step.exercise,
-            sets=step.sets,
-            reps=step.reps,
-            time_sec=step.duration_sec,
-            weight_kg=step.weight_kg,
-            classified=classified,
-            classify=classify,
-        )
+    for cluster in _cluster_by_superset_group(session.steps):
+        if len(cluster) > 1:
+            emitted, order = _emit_superset(
+                order, cluster, classified=classified, classify=classify,
+            )
+        else:
+            (step,) = cluster
+            emitted, order = _emit_step(
+                order,
+                name=step.exercise,
+                sets=step.sets,
+                reps=step.reps,
+                time_sec=step.duration_sec,
+                weight_kg=step.weight_kg,
+                classified=classified,
+                classify=classify,
+            )
         steps.extend(emitted)
     return _wrap_payload(session.title, session.kind, steps)
+
+
+def _cluster_by_superset_group(steps: list[Any]) -> list[list[Any]]:
+    """Group consecutive steps that share a non-null superset_group into one
+    cluster each; every other step is its own single-item cluster. Only
+    consecutive steps are merged — a group id repeated non-consecutively
+    (e.g. group 1, group 2, group 1) is treated as two separate supersets
+    rather than silently reordered to merge them, since that would move
+    exercises the athlete/Claude put in a specific order."""
+    clusters: list[list[Any]] = []
+    for step in steps:
+        if (
+            step.superset_group is not None
+            and clusters
+            and clusters[-1]
+            and clusters[-1][-1].superset_group == step.superset_group
+        ):
+            clusters[-1].append(step)
+        else:
+            clusters.append([step])
+    return clusters
 
 
 def list_garmin_workouts(user_id: int) -> list[dict[str, str]]:

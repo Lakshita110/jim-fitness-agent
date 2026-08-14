@@ -78,6 +78,61 @@ def test_single_set_timed_step_stays_flat():
     assert "weightValue" not in step  # no weight -> field omitted
 
 
+def test_superset_wraps_multiple_exercises_in_one_repeat_group():
+    """The reported bug: save_to_library had no way to group two different
+    exercises under one shared round count — "Wall sit -> Row" x3 rounds
+    just came out as 6 separate ungrouped steps. superset_group fixes that:
+    ONE RepeatGroupDTO wrapping BOTH exercises, not two separate ones."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Wall sit", sets=3, duration_sec=30, superset_group=1),
+            ExerciseStep(exercise="Row", sets=3, reps=10, superset_group=1),
+        ])
+    )
+    (group,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert group["type"] == "RepeatGroupDTO"
+    assert group["numberOfIterations"] == 3
+    wall_sit, row = group["workoutSteps"]
+    assert wall_sit["description"] == "Wall sit"
+    assert wall_sit["endConditionValue"] == 30
+    assert row["description"] == "Row"
+    assert row["endConditionValue"] == 10
+    # both exercises get their own sequential stepOrder inside the group
+    assert wall_sit["stepOrder"] < row["stepOrder"]
+
+
+def test_superset_only_merges_consecutive_same_group_steps():
+    """A repeated group id that ISN'T consecutive (group 1, group 2, group 1)
+    is two separate supersets, not one merged group — reordering exercises
+    the athlete/Claude explicitly sequenced would be a worse bug than not
+    merging at all."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Wall sit", sets=2, duration_sec=30, superset_group=1),
+            ExerciseStep(exercise="Row", sets=2, reps=10, superset_group=1),
+            ExerciseStep(exercise="Plank", sets=1, duration_sec=40),
+            ExerciseStep(exercise="Wall sit", sets=2, duration_sec=30, superset_group=1),
+        ])
+    )
+    steps = payload["workoutSegments"][0]["workoutSteps"]
+    assert len(steps) == 3  # [superset(2 ex), plank, superset(1 ex, sets>1 so still wrapped)]
+    assert len(steps[0]["workoutSteps"]) == 2
+    assert steps[1]["type"] == "ExecutableStepDTO"  # plank, ungrouped, sets=1 stays flat
+    assert steps[2]["type"] == "RepeatGroupDTO"  # the second "wall sit" alone, own block
+
+
+def test_ungrouped_steps_are_unaffected_by_superset_logic():
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Goblet squat", sets=3, reps=8),
+            ExerciseStep(exercise="Side plank", sets=1, duration_sec=40),
+        ])
+    )
+    steps = payload["workoutSegments"][0]["workoutSteps"]
+    assert steps[0]["type"] == "RepeatGroupDTO"
+    assert steps[1]["type"] == "ExecutableStepDTO"
+
+
 def test_step_orders_are_sequential_across_groups():
     payload = build_strength_payload(
         session(

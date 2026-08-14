@@ -81,6 +81,16 @@ class ExerciseStep(BaseModel):
     weight_kg: float | None = None
     notes: str = ""
 
+    # Consecutive steps sharing the same non-null `superset_group` (and the
+    # same `sets` count) are wrapped in ONE Garmin repeat block together —
+    # "Round 1/3: Wall sit -> Row" as a single grouped unit on the watch —
+    # instead of each getting its own separate repeat block. See
+    # tools.garmin.build_strength_payload for where this is consumed;
+    # Garmin's own structured-workout format has no way to express a
+    # multi-exercise repeat block other than nesting several ExecutableStepDTOs
+    # inside one RepeatGroupDTO, which is exactly what grouping does here.
+    superset_group: int | None = None
+
     # The model routinely sends explicit `null` for `sets` on a duration-only
     # step (e.g. a plank) instead of omitting the key — a bare `int` field
     # rejects that outright, and _parse_draft drops the WHOLE day on any one

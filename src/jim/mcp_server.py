@@ -132,6 +132,13 @@ class StepIn(BaseModel):
     reps: int | None = None
     duration_sec: int | None = None
     weight_kg: float | None = None
+    # Consecutive steps sharing the same superset_group (an arbitrary int
+    # you choose, e.g. 1, 2, 3...) are wrapped together as one round on the
+    # watch — "Round 1/3: Wall sit -> Row" — instead of each getting its own
+    # separate repeat block. Leave unset for a normal single-exercise step.
+    # All steps in a group should share the same `sets` value (the shared
+    # round count); the first one wins if they don't agree.
+    superset_group: int | None = None
 
 
 # --- read: history, readiness, calendar, workout library --------------------
@@ -253,6 +260,15 @@ def create_or_update_workout(
     athlete sees on their watch, verbatim, with no matching to smooth over a
     vague name. Write it like a real step ("Easy run", "Brisk walk", "Tempo
     intervals"), not a placeholder like "Go" or "Exercise".
+
+    For a superset (two or more exercises done back-to-back as one round,
+    repeated — e.g. "3 rounds of wall sit then row"), give each step the
+    same `superset_group` integer and the same `sets` value; they must be
+    consecutive in `steps`. That's the only way to express it — Garmin's
+    repeat block wraps one exercise by default (steps without a
+    superset_group each get their own individual repeat when sets>1, same
+    as always), and a shared superset_group is what tells it to wrap
+    multiple exercises under one shared round count instead.
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,

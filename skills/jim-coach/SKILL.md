@@ -116,6 +116,15 @@ name — "Easy run", "Tempo intervals", "Brisk walk" — never a vague
 placeholder like "Go" or "Exercise"; the athlete would see that exact word
 on their wrist mid-workout.
 
+For a superset (two-plus exercises done back-to-back as one round, for N
+rounds — "3 rounds of wall sit then row"), give each of those steps the
+same `superset_group` integer and the same `sets` value, and keep them
+consecutive in the step list. Without a shared `superset_group`, listing
+"wall sit, row, wall sit, row..." just produces separate ungrouped steps in
+the right order — correct sequence, but not boxed together as a round on
+the watch. A step with no `superset_group` behaves exactly as before
+(its own repeat block if `sets` > 1, otherwise flat).
+
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 
 There's no merge behavior: whatever you send becomes the entire constraints
