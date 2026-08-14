@@ -1,8 +1,6 @@
 """`research_training` — Tavily + pgvector over the curated corpus.
 
-Reachable only as one of coach.py's bounded per-turn tool calls (see
-MAX_TOOL_ROUNDS in coach.py) — there is no separate heuristic gate. No
-open-web free-roam: Tavily is restricted to the corpus source domains, and
+No open-web free-roam: Tavily is restricted to the corpus source domains, and
 pgvector search covers the vetted articles + PT protocol."""
 
 import logging

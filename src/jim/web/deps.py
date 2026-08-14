@@ -1,6 +1,6 @@
-"""Cross-cutting request helpers used by every route group (auth, chat,
-playbook, garmin) — kept separate from any one group since none of them own
-these."""
+"""Cross-cutting request helpers used by every route group (auth, garmin
+onboarding, constraints) — kept separate from any one group since none of
+them own these."""
 
 from fastapi import HTTPException, Request
 

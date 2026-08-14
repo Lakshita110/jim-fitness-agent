@@ -12,7 +12,6 @@ dependencies = [
     "openai>=1.40",            # OpenRouter-compatible client (base_url override)
     "garminconnect>=0.2.19",
     "tavily-python>=0.5",
-    "pyyaml>=6.0",
     "cryptography>=42",        # AES-GCM encryption of credentials at rest (crypto.py)
     "bcrypt>=4.0",              # password hashing (auth.py)
     "itsdangerous>=2.1",        # signed, expiring session cookies (auth.py)

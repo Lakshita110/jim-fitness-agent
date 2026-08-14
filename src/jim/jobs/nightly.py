@@ -1,7 +1,8 @@
 """Nightly job (~21:00 local): housekeeping only — sync today's data into
 Postgres, reconcile today's adherence, and sweep stale one-off Garmin
-adaptations. It does NOT plan tomorrow; the athlete gets plan edits by talking
-to the coach (see coach.py), not from an unsolicited draft written overnight.
+adaptations. It does NOT plan tomorrow; the athlete gets plan edits by
+talking to Claude through the Garmin MCP server (see mcp_server.py), not
+from an unsolicited draft written overnight.
 
 A user with zero rows in garmin_daily (brand new signup) gets a one-time
 ~90-day backfill — see tools/garmin.backfill_if_empty, triggered from
@@ -11,9 +12,9 @@ signup's ~90 sequential Garmin calls could blow the whole cron run's 60s
 Vercel budget for every other user sharing that invocation, so it
 deliberately lives outside this module.
 
-This still has to run nightly because coach.py's fetch_state() reads
-query_history/readiness_read, which read the tables sync_today fills — without
-this job, readiness/volume features and adherence tracking go stale.
+This still has to run nightly because the readiness/history read tools
+(tools/history.py) read the tables sync_today fills — without this job,
+readiness/volume features and adherence tracking go stale.
 
 Two entrypoints, same work:
 - Vercel Cron -> GET /api/cron/nightly (see app.py), the deployed path.
@@ -97,41 +98,16 @@ def sync_today(user_id: int) -> None:
         conn.commit()
 
 
-def cleanup_stale_adaptations(user_id: int, today: date) -> None:
-    """Delete one-off Garmin workouts (built for a single adapted day, never
-    promoted into the playbook) whose day has already passed — see the
-    "jim_created_workouts" kv entry written by coach._push_one. A failed
-    delete just leaves the entry for tomorrow's sweep to retry.
-
-    This is coach.py's own bookkeeping — it only knows about workouts *it*
-    created. See cleanup_adapted_workouts below for the MCP path's
-    equivalent, which has no such kv entry to read."""
-    from jim.db import kv_get, kv_set
-    from jim.tools import garmin
-
-    created = kv_get(user_id, "jim_created_workouts") or {}
-    for fd in [d for d in created if date.fromisoformat(d) < today]:
-        try:
-            garmin.delete_garmin_workout(user_id, created[fd]["workout_id"])
-        except Exception:
-            log.warning("couldn't delete stale workout for user %s on %s",
-                        user_id, fd, exc_info=True)
-            continue
-        del created[fd]
-    kv_set(user_id, "jim_created_workouts", created)
-
-
 def cleanup_adapted_workouts(user_id: int, today: date, lookback_days: int = 30) -> None:
-    """The MCP path's equivalent of cleanup_stale_adaptations: Claude creates
-    one-off workouts directly via mcp_server.create_or_update_workout, with
-    no Jim-side record of having done so (no coach.py, no kv entry) — Garmin
-    itself is the only source of truth. So instead of reading a kv map, this
-    scans the athlete's actual Garmin calendar for the trailing window,
-    finds items titled with ADAPTED_WORKOUT_PREFIX whose date has already
-    passed, and deletes them. Only scheduled-and-past items are covered; an
-    adapted workout created but never scheduled has no date to sweep by and
-    is a known gap (rare in practice — creation and scheduling happen in the
-    same conversational turn)."""
+    """Claude creates one-off workouts directly via
+    mcp_server.create_or_update_workout, with no Jim-side record of having
+    done so — Garmin itself is the only source of truth. So instead of
+    reading a kv map, this scans the athlete's actual Garmin calendar for
+    the trailing window, finds items titled with ADAPTED_WORKOUT_PREFIX
+    whose date has already passed, and deletes them. Only scheduled-and-past
+    items are covered; an adapted workout created but never scheduled has no
+    date to sweep by and is a known gap (rare in practice — creation and
+    scheduling happen in the same conversational turn)."""
     from jim.tools import garmin
 
     start = today - timedelta(days=lookback_days)
@@ -164,15 +140,11 @@ def _run_nightly_for_user(user_id: int) -> dict:
     today = _today_for_user(user_id)
     sync_today(user_id)
     try:
-        cleanup_stale_adaptations(user_id, today)
+        cleanup_adapted_workouts(user_id, today)
     except Exception:
         # Cleanup is housekeeping, not the sync itself — a Garmin hiccup here
         # must not stop today's reconcile from running.
         log.warning("adaptation cleanup failed for user %s", user_id, exc_info=True)
-    try:
-        cleanup_adapted_workouts(user_id, today)
-    except Exception:
-        log.warning("MCP adaptation cleanup failed for user %s", user_id, exc_info=True)
     reconcile_day(user_id, today)
     elapsed = round(time.monotonic() - started, 1)
     log.info("nightly housekeeping done in %ss for user %s", elapsed, user_id)

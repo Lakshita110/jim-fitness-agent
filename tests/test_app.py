@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import jim.app as app_mod
-from jim import auth, coach
+from jim import auth
 from jim.auth import User
 from jim.web import deps
 
@@ -20,10 +20,10 @@ def _fresh_session(monkeypatch):
     test's "no cookie -> 403" assertions.
 
     Also stub `_ready()`: these are unit tests of routing/auth/serialization
-    with `coach`/`auth` mocked, so the schema-migration step is not under
-    test. Left real, it calls db.ensure_migrated() -> connect(), which
-    hard-raises without a live DATABASE_URL and turns every DB-backed route
-    into a bare 500."""
+    with `auth` mocked, so the schema-migration step is not under test. Left
+    real, it calls db.ensure_migrated() -> connect(), which hard-raises
+    without a live DATABASE_URL and turns every DB-backed route into a bare
+    500."""
     monkeypatch.setattr(deps, "_ready", lambda: None)
     client.cookies.clear()
     yield
@@ -51,96 +51,27 @@ def test_health():
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_chat_message_flow(monkeypatch):
+def test_constraints_roundtrip(monkeypatch):
+    import jim.db as db_mod
+
     monkeypatch.setattr(app_mod, "settings", fake_settings)
+    store: dict[int, str] = {}
+    monkeypatch.setattr(db_mod, "get_constraints", lambda uid: store.get(uid, ""))
     monkeypatch.setattr(
-        coach, "converse",
-        lambda text, user_id, scope_date=None: {
-            "reply": f"echo: {text}", "draft": [], "scope": scope_date,
-        },
+        db_mod, "set_constraints", lambda uid, content: store.__setitem__(uid, content)
     )
+
     # No cookie -> shut, even for a well-formed body.
-    assert client.post("/chat/message", json={"text": "knee sore"}).status_code == 403
+    assert client.get("/api/constraints").status_code == 403
+    assert client.post("/api/constraints", json={"content": "x"}).status_code == 403
 
     _sign_in(monkeypatch)
-    r = client.post("/chat/message", json={"text": "knee sore"})
-    assert r.status_code == 200
-    assert r.json() == {"reply": "echo: knee sore", "draft": [], "scope": None}
-    # scope_date is threaded through to the coach
-    r2 = client.post("/chat/message", json={"text": "easier", "scope_date": "2026-07-14"})
-    assert r2.json()["scope"] == "2026-07-14"
-    assert client.post("/chat/message", json={"text": "  "}).status_code == 400
+    r = client.post("/api/constraints", json={"content": "no jumping, knee PT daily"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
 
-
-def test_chat_approve_clear_state(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(
-        coach, "approve", lambda user_id: "Pushed to Garmin:\n2026-07-09: ok"
-    )
-    cleared = []
-    monkeypatch.setattr(coach, "clear", lambda user_id: cleared.append(True))
-    monkeypatch.setattr(
-        coach, "current_state",
-        lambda user_id: {"history": [], "draft": [], "goals": "g", "push_status": {}},
-    )
-
-    assert client.post("/chat/approve", json={}).status_code == 403  # no cookie
-
-    _sign_in(monkeypatch)
-    r = client.post("/chat/approve", json={})
-    assert r.status_code == 200 and "Pushed" in r.json()["summary"]
-    assert r.json()["push_status"] == {}
-
-    assert client.post("/chat/clear", json={}).json() == {"ok": True}
-    assert cleared == [True]
-
-    s = client.get("/chat/state")
-    assert s.json()["goals"] == "g"
-
-
-def test_chat_state_requires_cookie(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    assert client.get("/chat/state").status_code == 403
-
-
-def test_chat_push_day(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    seen = {}
-    monkeypatch.setattr(
-        coach, "push_day",
-        lambda date, user_id: seen.update(date=date) or {
-            "summary": f"Pushed {date}", "draft": [], "push_status": {date: "pushed"},
-        },
-    )
-    r0 = client.post("/chat/push-day", json={"date": "2026-07-14"})
-    assert r0.status_code == 403  # no cookie
-
-    _sign_in(monkeypatch)
-    r = client.post("/chat/push-day", json={"date": "2026-07-14"})
-    assert r.status_code == 200
-    assert r.json()["summary"] == "Pushed 2026-07-14"
-    assert r.json()["push_status"] == {"2026-07-14": "pushed"}
-
-
-def test_chat_plan_week(monkeypatch):
-    monkeypatch.setattr(app_mod, "settings", fake_settings)
-    monkeypatch.setattr(
-        coach, "plan_week",
-        lambda user_id: {
-            "reply": "Here's your week.", "prompt": "Plan my training for…",
-            "draft": [], "push_status": {}, "today": "2026-07-14",
-        },
-    )
-    assert client.post("/chat/plan-week", json={}).status_code == 403  # no cookie
-
-    _sign_in(monkeypatch)
-    r = client.post("/chat/plan-week", json={})
-    assert r.status_code == 200
-    body = r.json()
-    # the UI renders `prompt` as the athlete's message and `reply` as Jim's
-    assert body["prompt"] == "Plan my training for…"
-    assert body["reply"] == "Here's your week."
-    assert body["draft"] == [] and body["push_status"] == {}
+    r2 = client.get("/api/constraints")
+    assert r2.status_code == 200
+    assert r2.json() == {"content": "no jumping, knee PT daily"}
 
 
 def test_cron_nightly_requires_vercel_bearer(monkeypatch):
@@ -230,17 +161,20 @@ def test_login_failure_is_generic_for_wrong_password_and_unknown_email(monkeypat
 
 
 def test_logout_clears_cookie_and_subsequent_requests_are_unauthenticated(monkeypatch):
+    import jim.db as db_mod
+
     monkeypatch.setattr(app_mod, "settings", fake_settings)
+    monkeypatch.setattr(db_mod, "get_constraints", lambda uid: "")
     _sign_in(monkeypatch)
-    assert client.get("/chat/state").status_code != 403  # signed in first
+    assert client.get("/api/constraints").status_code != 403  # signed in first
 
     r = client.post("/auth/logout")
     assert r.status_code == 200 and r.json() == {"ok": True}
 
-    assert client.get("/chat/state").status_code == 403
+    assert client.get("/api/constraints").status_code == 403
 
 
 def test_forged_cookie_resolves_to_unauthenticated_not_a_crash(monkeypatch):
     monkeypatch.setattr(app_mod, "settings", fake_settings)
     client.cookies.set(auth.SESSION_COOKIE_NAME, "not-a-real-token")
-    assert client.get("/chat/state").status_code == 403  # bounced, no crash
+    assert client.get("/api/constraints").status_code == 403  # bounced, no crash

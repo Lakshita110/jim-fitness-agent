@@ -25,7 +25,6 @@ class FakeDB:
     def __init__(self):
         self.users = []
         self.user_credentials = {}
-        self.playbooks = {}
         self._next_id = 1
 
     def execute(self, sql, params=()):
@@ -44,10 +43,6 @@ class FakeDB:
         if s.startswith("INSERT INTO user_credentials"):
             (user_id,) = params
             self.user_credentials[user_id] = {"user_id": user_id}
-            return FakeCursor([])
-        if s.startswith("INSERT INTO playbooks"):
-            user_id = params[0]
-            self.playbooks[user_id] = {"user_id": user_id, "raw": params}
             return FakeCursor([])
         if s.startswith("SELECT id, email, password_hash FROM users WHERE email"):
             (email,) = params
@@ -104,25 +99,6 @@ def test_create_user_hashes_password_and_seeds_rows(fake_db):
     assert auth_mod.verify_password("hunter2", stored["password_hash"])
 
     assert user.id in fake_db.user_credentials
-    assert user.id in fake_db.playbooks
-
-
-def test_create_user_seeds_the_generic_default_playbook_not_bare_empty(fake_db):
-    """Phase 4: new signups get playbook/defaults/ content (a placeholder
-    directives sentence), not an empty-empty literal and not the committed
-    athlete's real content — prove it's actually read from disk."""
-    from jim.playbook import _load_default_playbook
-
-    user = auth_mod.create_user("mom@example.com", "pw")
-    _, rotation_json, workouts_json, directives = fake_db.playbooks[user.id]["raw"]
-
-    default = _load_default_playbook()
-    assert directives == default.directives
-    assert "Settings" in directives and "Playbook" in directives
-    # not the real athlete's own content
-    assert "knee" not in directives.lower()
-    assert workouts_json == "{}"
-    assert rotation_json == "[]"
 
 
 def test_create_user_duplicate_email_rejected(fake_db):

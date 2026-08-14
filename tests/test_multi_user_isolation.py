@@ -19,7 +19,6 @@ import jim.auth as auth_mod
 import jim.db as db_mod
 from jim.auth import create_user
 from jim.db import kv_get, kv_set
-from jim.playbook import Playbook, WorkoutTemplate, load_playbook, save_playbook
 from jim.schemas import ExerciseStep, StructuredSession
 from jim.tools.history import exercise_history, query_history, workout_history
 from jim.tools.memory import record_outcome, record_suggestion
@@ -34,7 +33,6 @@ _COND_RE = re.compile(r"(\w+(?:\.\w+)?)\s=\s%s")
 _INSERT_RE = re.compile(r"INSERT INTO (\w+) \(([^)]+)\)\s+VALUES\s+\(([^)]+)\)(.*)")
 _JSON_COLUMNS = {
     "kv": {"value"},
-    "playbooks": {"rotation", "workouts"},
     "suggestions": {"plan"},
     "garmin_daily": {"raw"},
     "garmin_activities": {"summary"},
@@ -148,8 +146,8 @@ class FakeConn:
 def fake_db(monkeypatch):
     db = FakeDB()
     # jim.db.connect is monkeypatched at the source: history.py/memory.py/
-    # playbook.py/db.py all do `from jim.db import connect` INSIDE their
-    # functions, so they pick up this patched attribute at call time. auth.py
+    # db.py all do `from jim.db import connect` INSIDE their functions, so
+    # they pick up this patched attribute at call time. auth.py
     # imports `connect` at module scope, so it needs its own patch of the
     # same underlying db to actually share data with the rest.
     monkeypatch.setattr(db_mod, "connect", lambda: FakeConn(db))
@@ -242,84 +240,6 @@ def test_garmin_activity_and_exercise_set_rows_invisible_across_users(fake_db):
     assert "no logged sets" not in exercise_history(1, "goblet squat", days=180)
 
 
-# --- playbook ------------------------------------------------------------
-
-
-def test_playbook_isolated_across_users(fake_db):
-    pb_a = Playbook(rotation=["a"], directives="user A's private knee notes")
-    save_playbook(1, pb_a)
-
-    pb_b = load_playbook(2)
-    assert pb_b.directives != "user A's private knee notes"
-    assert pb_b == Playbook()  # user 2 has no row at all -> the safety-net default
-
-    # the owner still gets their own content back
-    assert load_playbook(1).directives == "user A's private knee notes"
-
-
-def test_playbook_save_does_not_overwrite_another_users_row(fake_db):
-    save_playbook(1, Playbook(directives="A"))
-    save_playbook(2, Playbook(directives="B"))
-    save_playbook(1, Playbook(directives="A revised"))
-    assert load_playbook(1).directives == "A revised"
-    assert load_playbook(2).directives == "B"
-
-
-def test_promote_garmin_workout_saves_template_and_clears_tracking(fake_db, monkeypatch):
-    """The shared promotion path (coach.py's model-callable tool and app.py's
-    HTTP import route both call this) — fetches the real Garmin workout,
-    saves it as a template, and clears the "jim_created_workouts" tracking
-    entry so it stops being a nightly-cleanup candidate."""
-    from jim.playbook import promote_garmin_workout
-
-    monkeypatch.setattr(
-        "jim.tools.garmin.get_garmin_workout_detail",
-        lambda user_id, workout_id: {
-            "workoutId": 2, "workoutName": "Full Body A — adapted 2026-07-09",
-            "sportType": {"sportTypeKey": "strength_training"},
-            "workoutSegments": [{"workoutSteps": [
-                {"type": "ExecutableStepDTO", "stepType": {"stepTypeKey": "interval"},
-                 "endCondition": {"conditionTypeKey": "reps"}, "endConditionValue": 8,
-                 "description": "Goblet squat"},
-            ]}],
-        },
-    )
-    kv_set(1, "jim_created_workouts", {
-        "2026-07-09": {"workout_id": "2", "template_key": "full_body_a"},
-        "2026-07-10": {"workout_id": "99", "template_key": None},
-    })
-
-    template = promote_garmin_workout(1, "2", "full_body_a", add_to_rotation=True)
-
-    assert template.label == "Full Body A — adapted 2026-07-09"
-    pb = load_playbook(1)
-    assert pb.workouts["full_body_a"].garmin_workout_id == "2"
-    assert pb.rotation == ["full_body_a"]
-    remaining = kv_get(1, "jim_created_workouts")
-    assert set(remaining) == {"2026-07-10"}  # only the promoted date is cleared
-
-
-def test_playbook_round_trips_a_workout_template(fake_db):
-    """Regression: WorkoutTemplate.model_dump() carries its own "key" field
-    (it's a real model attribute, not just a dict key), so a save + load must
-    not choke on it — a naive `WorkoutTemplate(key=k, **v)` raises "multiple
-    values for keyword argument 'key'" the moment a template with a `key` set
-    is loaded back (exactly what the Garmin-import route persists)."""
-    pb = Playbook(
-        rotation=["full_body_a"],
-        workouts={
-            "full_body_a": WorkoutTemplate(
-                key="full_body_a", label="Full Body A",
-                garmin_workout_id="1414012813", sport="strength",
-            ),
-        },
-    )
-    save_playbook(1, pb)
-    loaded = load_playbook(1)
-    assert loaded.workouts["full_body_a"].label == "Full Body A"
-    assert loaded.workouts["full_body_a"].garmin_workout_id == "1414012813"
-
-
 # --- suggestions / outcomes ---------------------------------------------------
 
 
@@ -346,11 +266,6 @@ def test_suggestions_and_outcomes_isolated_via_two_real_users(fake_db):
         user_a.id, target, _session(target, "A's real plan"), "r", False, "fast",
         source="chat",
     )
-
-    save_playbook(user_a.id, Playbook(directives="A's knee-specific notes"))
-    # B's playbook is untouched by A's save — still whatever B was seeded with
-    # at signup (the generic default, not A's content).
-    assert load_playbook(user_b.id).directives != "A's knee-specific notes"
 
     kv_set(user_a.id, "goals", "A's real goal")
     assert kv_get(user_b.id, "goals") is None

@@ -7,8 +7,6 @@ user_id through Garmin/kv/coach — that's Phase 3. There is still only one
 real athlete's data in the system; a logged-in user authenticates as themselves,
 but the business logic underneath is still global."""
 
-import json
-
 import bcrypt
 import psycopg
 from itsdangerous import BadSignature, URLSafeTimedSerializer
@@ -16,7 +14,6 @@ from pydantic import BaseModel
 
 from jim.config import settings
 from jim.db import connect
-from jim.playbook import _load_default_playbook
 
 SESSION_COOKIE_NAME = "jim_session"
 SESSION_MAX_AGE = 400 * 24 * 3600  # ~13 months (Chrome caps cookie life at 400d)
@@ -37,14 +34,13 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_user(email: str, password: str) -> User:
-    """Insert a new user plus empty user_credentials rows, seeded with the
-    generic default playbook (playbook/defaults/) — not the committed athlete
-    YAML, which is this one athlete's own knee-specific content. That real
-    content only reaches an account via the one-off backfill script
-    (scripts/backfill_users.py)."""
+    """Insert a new user plus an empty user_credentials row. Nothing seeds a
+    playbook anymore — the MCP path's only Jim-side state is the constraints
+    table (`web/constraints_routes.py`), written on request, not at signup;
+    named workouts live in the athlete's own Garmin library, not a Jim-owned
+    template store."""
     email = email.strip().lower()
     password_hash = hash_password(password)
-    seed = _load_default_playbook()
     try:
         with connect() as conn:
             row = conn.execute(
@@ -54,16 +50,6 @@ def create_user(email: str, password: str) -> User:
             ).fetchone()
             conn.execute(
                 "INSERT INTO user_credentials (user_id) VALUES (%s)", (row["id"],)
-            )
-            conn.execute(
-                "INSERT INTO playbooks (user_id, rotation, workouts, directives)"
-                " VALUES (%s, %s, %s, %s)",
-                (
-                    row["id"],
-                    json.dumps(seed.rotation),
-                    json.dumps({k: v.model_dump(mode="json") for k, v in seed.workouts.items()}),
-                    seed.directives,
-                ),
             )
             conn.commit()
     except psycopg.errors.UniqueViolation as e:

@@ -1,4 +1,4 @@
-"""Typed contracts shared by tools, agent, and guardrail (PLAN.md §7).
+"""Typed contracts shared by the Garmin tools and MCP server.
 
 Every tool returns one of these compact models — never raw API payloads.
 Raw payloads are persisted to the `raw JSON` columns instead so features can
@@ -9,14 +9,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-# The four original buckets ("strength", "conditioning", "mobility", "rest")
-# are what the legacy coach.py/agent/validate.py guardrail path reasons
-# about and is all that path ever produces — kept exactly as-is so its
-# `kind == "conditioning"` / `kind in ("rest", "mobility")` checks keep
-# working unchanged. The MCP path (mcp_server.create_or_update_workout)
-# additionally accepts real, more specific Garmin sport types so a workout
-# doesn't have to be shoehorned into "conditioning" to be created — see
-# tools.garmin.SPORT_TYPES for what each maps to on Garmin's side.
+# The original four buckets ("strength", "conditioning", "mobility", "rest")
+# plus the real, more specific Garmin sport types mcp_server.create_or_update_
+# workout accepts, so a workout doesn't have to be shoehorned into
+# "conditioning" to be created — see tools.garmin.SPORT_TYPES for what each
+# maps to on Garmin's side.
 SessionKind = Literal[
     "strength", "conditioning", "mobility", "rest",
     "running", "cycling", "swimming", "walking", "hiking", "yoga", "pilates",
@@ -142,8 +139,3 @@ class ResearchHit(BaseModel):
 class WorkoutRef(BaseModel):
     workout_id: str
     provider: Literal["garmin"] = "garmin"
-
-
-class ValidationResult(BaseModel):
-    ok: bool
-    violations: list[str] = []
