@@ -23,7 +23,7 @@ about identity is ever cached across calls. See tests/test_mcp_server.py
 for the isolation check this depends on.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -140,67 +140,25 @@ class StepIn(BaseModel):
 @mcp.tool
 def get_readiness(as_of: str | None = None) -> dict:
     """Today's (or `as_of`, ISO date) training-load + recovery verdict —
-    push/steady/ease/rest, with the ACWR and recovery numbers behind it."""
+    push/steady/ease/rest, with the ACWR and recovery numbers behind it.
+
+    Also includes `training_readiness` and `training_status`, Garmin's own
+    (differently computed) readiness verdict and training-load
+    classification (productive, peaking, overreaching, detraining,
+    unproductive, ...) — a second opinion alongside Jim's own ACWR-based
+    verdict above them. Either can come back empty/null if Garmin hasn't
+    computed it for this athlete's watch/history yet; that's real, not a
+    bug, and just means less to go on from that source today."""
+    from jim.tools.garmin import get_training_readiness, get_training_status
     from jim.tools.history import readiness_read
 
     user_id = _current_user_id()
     _ensure_history(user_id)
     day = date.fromisoformat(as_of) if as_of else date.today()
-    return readiness_read(user_id, day).model_dump(mode="json")
-
-
-@mcp.tool
-def get_training_readiness(as_of: str | None = None) -> dict:
-    """Garmin's own dedicated readiness verdict for today (or `as_of`, ISO
-    date) plus the specific factors behind it (sleep, HRV, recovery time,
-    acute training load, stress). This is richer and differently computed
-    than `get_readiness` (Jim's own ACWR-based verdict) — worth pulling both
-    when you want a second opinion, e.g. before a hard session or if
-    something feels off despite `get_readiness` looking fine."""
-    from jim.tools.garmin import get_training_readiness as _get
-
-    user_id = _current_user_id()
-    _ensure_history(user_id)
-    day = date.fromisoformat(as_of) if as_of else date.today()
-    return _get(user_id, day)
-
-
-@mcp.tool
-def get_training_status(as_of: str | None = None) -> dict:
-    """Garmin's own training-load classification for today (or `as_of`, ISO
-    date) — productive, peaking, overreaching, detraining, unproductive,
-    etc. — plus VO2max trend. A longer-horizon fitness-trend signal, not a
-    day-to-day push/rest call; useful when the athlete asks how their
-    training is trending, not for "what should today look like"."""
-    from jim.tools.garmin import get_training_status as _get
-
-    user_id = _current_user_id()
-    _ensure_history(user_id)
-    day = date.fromisoformat(as_of) if as_of else date.today()
-    return _get(user_id, day)
-
-
-@mcp.tool
-def get_daily_steps(start: str, end: str) -> list[dict]:
-    """Daily step counts (and Garmin's own step goal) for [start, end] (ISO
-    dates, inclusive) — general daily activity, not structured training."""
-    from jim.tools.garmin import get_daily_steps as _get
-
-    user_id = _current_user_id()
-    _ensure_history(user_id)
-    return _get(user_id, date.fromisoformat(start), date.fromisoformat(end))
-
-
-@mcp.tool
-def get_weigh_ins(start: str, end: str) -> dict:
-    """Logged bodyweight entries for [start, end] (ISO dates, inclusive) —
-    whatever the athlete or a connected smart scale has recorded in Garmin
-    Connect. Empty if they don't log weight."""
-    from jim.tools.garmin import get_weigh_ins as _get
-
-    user_id = _current_user_id()
-    _ensure_history(user_id)
-    return _get(user_id, date.fromisoformat(start), date.fromisoformat(end))
+    result = readiness_read(user_id, day).model_dump(mode="json")
+    result["training_readiness"] = get_training_readiness(user_id, day)
+    result["training_status"] = get_training_status(user_id, day)
+    return result
 
 
 @mcp.tool
@@ -216,12 +174,25 @@ def get_exercise_history(exercise: str, days: int = 180) -> str:
 
 @mcp.tool
 def get_recent_activities(days: int = 14) -> str:
-    """Recent Garmin activities (type, duration) for the trailing window."""
+    """Recent Garmin activities (type, duration) for the trailing window,
+    plus a daily step count line per day — general daily activity context,
+    not structured training."""
+    from jim.tools.garmin import get_daily_steps
     from jim.tools.history import workout_history
 
     user_id = _current_user_id()
     _ensure_history(user_id)
-    return workout_history(user_id, days=days)
+    text = workout_history(user_id, days=days)
+
+    today = date.today()
+    steps = get_daily_steps(user_id, today - timedelta(days=days), today)
+    if steps:
+        step_lines = "\n".join(
+            f"{s['calendarDate']}: {s['totalSteps']} steps (goal {s['stepGoal']})"
+            for s in steps
+        )
+        text = f"{text}\n\nDaily steps:\n{step_lines}"
+    return text
 
 
 @mcp.tool
@@ -277,7 +248,11 @@ def create_or_update_workout(
     workouts/list_saved_workouts, but prefer the exact names above when
     you're the one choosing. strength/mobility steps get matched against
     Garmin's exercise library (category + exerciseName); every other kind is
-    treated as a plain activity and just carries its description.
+    treated as a plain activity and just carries its description — meaning
+    for those kinds, whatever you put in `exercise` is exactly what the
+    athlete sees on their watch, verbatim, with no matching to smooth over a
+    vague name. Write it like a real step ("Easy run", "Brisk walk", "Tempo
+    intervals"), not a placeholder like "Go" or "Exercise".
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,
