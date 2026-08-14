@@ -101,28 +101,44 @@ def sync_today(user_id: int) -> None:
 def cleanup_adapted_workouts(user_id: int, today: date, lookback_days: int = 30) -> None:
     """Claude creates one-off workouts directly via
     mcp_server.create_or_update_workout, with no Jim-side record of having
-    done so — Garmin itself is the only source of truth. So instead of
-    reading a kv map, this scans the athlete's actual Garmin calendar for
-    the trailing window, finds items titled with ADAPTED_WORKOUT_PREFIX
-    whose date has already passed, and deletes them. Only scheduled-and-past
-    items are covered; an adapted workout created but never scheduled has no
-    date to sweep by and is a known gap (rare in practice — creation and
-    scheduling happen in the same conversational turn)."""
+    done so — Garmin itself is the only source of truth.
+
+    This used to scan get_scheduled_workouts (the calendar view) for
+    past-dated items, but Garmin drops a workout from that view once it's
+    been completed — moved to activity history, not upcoming plans. A
+    one-off adapted workout done on time and then swept by the *next*
+    night's cron was fine, but if Garmin removed it from the calendar
+    before that cron ran, cleanup had no date left to check against and it
+    became a permanent orphan (an actual case: a completed walk survived
+    for days with no scheduled-date trace anywhere). Scanning the real
+    workout library instead — which doesn't lose entries on completion —
+    and keying off each workout's own createdDate closes that race. Also
+    incidentally covers the old known gap of an adapted workout created but
+    never scheduled, which had no calendar date to sweep by at all."""
     from jim.tools import garmin
 
     start = today - timedelta(days=lookback_days)
     end = today - timedelta(days=1)
     if start > end:
         return
-    scheduled = garmin.get_scheduled_workouts(user_id, start, end)
-    for item in scheduled:
-        if not item["title"].startswith(garmin.ADAPTED_WORKOUT_PREFIX):
+    for w in garmin.list_garmin_workouts(user_id):
+        if not w["name"].startswith(garmin.ADAPTED_WORKOUT_PREFIX):
             continue
         try:
-            garmin.delete_garmin_workout(user_id, item["workout_id"])
+            detail = garmin.get_garmin_workout_detail(user_id, w["workout_id"])
+            created_raw = detail.get("createdDate") or detail.get("updatedDate")
+            created = date.fromisoformat(created_raw[:10]) if created_raw else None
         except Exception:
-            log.warning("couldn't delete adapted workout %s for user %s on %s",
-                        item["workout_id"], user_id, item["date"], exc_info=True)
+            log.warning("couldn't read created date for workout %s (user %s)",
+                        w["workout_id"], user_id, exc_info=True)
+            continue
+        if created is None or not (start <= created <= end):
+            continue
+        try:
+            garmin.delete_garmin_workout(user_id, w["workout_id"])
+        except Exception:
+            log.warning("couldn't delete adapted workout %s for user %s (created %s)",
+                        w["workout_id"], user_id, created, exc_info=True)
 
 
 def _run_nightly_for_user(user_id: int) -> dict:
