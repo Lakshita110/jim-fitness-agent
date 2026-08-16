@@ -144,9 +144,11 @@ class StepIn(BaseModel):
     # fixed timer — see save_to_library/create_or_update_workout's docstring.
     self_paced_rest: bool = False
     # Garmin's own step role, not just descriptive text — "warmup"/"cooldown"/
-    # "recovery" show correctly on the watch instead of being lumped in as
-    # a generic interval. Default "interval" is the old, only, behavior.
-    role: Literal["warmup", "interval", "cooldown", "recovery"] = "interval"
+    # "recovery"/"other"/"main" show correctly on the watch instead of being
+    # lumped in as a generic interval. Default "interval" is the old, only,
+    # behavior. "other"/"main" have no documentation anywhere; found by
+    # directly probing stepTypeIds beyond the commonly-cited 1-6.
+    role: Literal["warmup", "interval", "cooldown", "recovery", "other", "main"] = "interval"
     # Distance-based ending in meters ("run 5km"), instead of reps/duration_sec.
     distance_m: float | None = None
     # Heart rate / power zone target (Garmin's own per-athlete zone number,
@@ -252,35 +254,6 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
-# --- TEMP: checking for stepTypeIds beyond the known 6, remove after use --
-
-
-@mcp.tool
-def _debug_probe_step_type(step_type_id: int) -> dict:
-    """TEMPORARY."""
-    from jim.tools.garmin import client
-
-    payload = {
-        "workoutName": "STEPTYPE PROBE",
-        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
-        "workoutSegments": [{
-            "segmentOrder": 1,
-            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
-            "workoutSteps": [{
-                "type": "ExecutableStepDTO",
-                "stepOrder": 1,
-                "stepType": {"stepTypeId": step_type_id, "stepTypeKey": "probe"},
-                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                "endConditionValue": 30,
-                "description": "probe",
-            }],
-        }],
-    }
-    api = client(_current_user_id())
-    resp = api.upload_workout(payload)
-    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp.get("workoutSegments")}
-
-
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
@@ -328,10 +301,10 @@ def create_or_update_workout(
     sharing one round).
 
     Other per-step options, all optional:
-    - `role`: "warmup", "cooldown", or "recovery" instead of the default
-      "interval" — shows correctly on the watch as that real step type
-      rather than a generic interval. Use for an actual warmup/cooldown
-      block, not just a step you happen to put first/last.
+    - `role`: "warmup", "cooldown", "recovery", "other", or "main" instead
+      of the default "interval" — shows correctly on the watch as that real
+      step type rather than a generic interval. Use for an actual
+      warmup/cooldown block, not just a step you happen to put first/last.
     - `distance_m`: end the step on distance (meters) instead of reps or
       duration_sec — e.g. "run 5km." Only one of reps/distance_m/
       duration_sec is used, in that priority order.

@@ -105,8 +105,10 @@ class ExerciseStep(BaseModel):
     # text. Every step defaulted to "interval" before; a real warmup/
     # cooldown/recovery block now shows correctly on the watch instead of
     # being lumped in as a generic interval. Live-verified: stepTypeId
-    # 1=warmup, 2=cooldown, 4=recovery, 3=interval (the existing default).
-    role: Literal["warmup", "interval", "cooldown", "recovery"] = "interval"
+    # 1=warmup, 2=cooldown, 3=interval (the existing default), 4=recovery,
+    # 7=other, 8=main — the last two appear in no documentation anywhere,
+    # official or reverse-engineered; only found by directly probing ids.
+    role: Literal["warmup", "interval", "cooldown", "recovery", "other", "main"] = "interval"
 
     # Distance-based ending ("run 5km") as an alternative to reps/
     # duration_sec — whichever of reps/duration_sec/distance_m is set wins,

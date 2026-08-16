@@ -142,8 +142,12 @@ def test_self_paced_rest_works_inside_a_superset():
 
 def test_role_sets_the_real_stepType():
     """Every step defaulted to a generic "interval" stepType before role
-    existed. Live-verified: warmup=1, cooldown=2, interval=3, recovery=4."""
-    for role, expected_id in [("warmup", 1), ("cooldown", 2), ("recovery", 4)]:
+    existed. Live-verified: warmup=1, cooldown=2, interval=3, recovery=4,
+    other=7, main=8 — the last two undocumented anywhere, found only by
+    directly probing ids beyond the commonly-cited 1-6."""
+    for role, expected_id in [
+        ("warmup", 1), ("cooldown", 2), ("recovery", 4), ("other", 7), ("main", 8),
+    ]:
         payload = build_strength_payload(
             session([ExerciseStep(exercise="Jog", duration_sec=300, role=role)],
                     kind="conditioning")

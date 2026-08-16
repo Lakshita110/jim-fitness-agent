@@ -527,12 +527,20 @@ _TAXONOMY_CLASSIFIED_KINDS = {"strength", "mobility"}
 
 
 # Garmin's own step role (stepType). "interval" is the default every step
-# used before role support existed. Live-verified against a real account.
+# used before role support existed. Live-verified against a real account —
+# including 7/"other" and 8/"main", which appear in no documentation
+# (official or reverse-engineered) found anywhere; only found by directly
+# probing ids beyond the commonly-cited 1-6. "rest" (5) and "repeat" (6)
+# aren't here: rest is its own self_paced_rest flag (a rest step also needs
+# a different endCondition, not just a different stepType) and repeat is
+# the structural RepeatGroupDTO wrapping mechanism, not a per-step choice.
 _STEP_TYPES: dict[str, dict[str, Any]] = {
     "warmup": {"stepTypeId": 1, "stepTypeKey": "warmup"},
     "cooldown": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
     "interval": {"stepTypeId": 3, "stepTypeKey": "interval"},
     "recovery": {"stepTypeId": 4, "stepTypeKey": "recovery"},
+    "other": {"stepTypeId": 7, "stepTypeKey": "other"},
+    "main": {"stepTypeId": 8, "stepTypeKey": "main"},
 }
 
 

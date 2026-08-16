@@ -134,10 +134,10 @@ ignored. This works as one of the entries inside a superset_group too —
 e.g. wall sit, row, self-paced rest, all one round.
 
 A few more per-step options, all optional and independent of each other:
-- `role`: "warmup" / "cooldown" / "recovery" instead of the default
-  "interval" — an actual warmup or cooldown block should use these, not
-  just be the first/last step in the list, so it shows correctly on the
-  watch rather than as a generic interval.
+- `role`: "warmup" / "cooldown" / "recovery" / "other" / "main" instead of
+  the default "interval" — an actual warmup or cooldown block should use
+  these, not just be the first/last step in the list, so it shows correctly
+  on the watch rather than as a generic interval.
 - `distance_m`: end a step on distance (meters) instead of reps or
   duration_sec — "run 5km." Only one of reps/distance_m/duration_sec
   actually applies, in that priority order, if more than one is set.
