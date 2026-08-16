@@ -160,6 +160,11 @@ class StepIn(BaseModel):
     # not independently confirmed against what displays on the watch).
     target_pace_min_mps: float | None = None
     target_pace_max_mps: float | None = None
+    # A second target riding alongside a primary one (target_heart_rate_zone
+    # or target_power_zone) — e.g. HR zone as primary, cadence range on top.
+    # Has no effect without a primary target set.
+    secondary_target_cadence_min: float | None = None
+    secondary_target_cadence_max: float | None = None
 
 
 # --- read: history, readiness, calendar, workout library --------------------
@@ -259,7 +264,7 @@ def get_saved_workout(workout_id: str) -> dict:
 
 @mcp.tool
 def create_or_update_workout(
-    for_date: str, title: str, kind: str, steps: list[StepIn]
+    for_date: str, title: str, kind: str, steps: list[StepIn], notes: str = "",
 ) -> dict:
     """Create a new Garmin workout from structured steps (exercise, sets,
     reps or duration_sec, weight_kg) and return its `workout_id`. Garmin has
@@ -316,6 +321,13 @@ def create_or_update_workout(
       to confirm this displays as the pace they expect the first time you
       use it; the unit convention here wasn't independently verified
       against the watch display, only that Garmin accepts it.
+    - `secondary_target_cadence_min` / `_max`: a second target riding
+      alongside `target_heart_rate_zone`/`target_power_zone` — e.g. HR
+      zone as primary, cadence range on top. No effect without a primary
+      target also set on the same step.
+
+    `notes` is a workout-level note visible on the workout itself, separate
+    from `title` — e.g. "scaled down from last week, elbow's still sore."
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,
@@ -332,13 +344,14 @@ def create_or_update_workout(
         kind=_normalize_kind(kind),
         title=f"{ADAPTED_WORKOUT_PREFIX}{title}",
         steps=[ExerciseStep(**s.model_dump()) for s in steps],
+        rationale_summary=notes,
     )
     ref = create_garmin_workout(user_id, session)
     return ref.model_dump(mode="json")
 
 
 @mcp.tool
-def save_to_library(title: str, kind: str, steps: list[StepIn]) -> dict:
+def save_to_library(title: str, kind: str, steps: list[StepIn], notes: str = "") -> dict:
     """Create a PERMANENT Garmin workout, meant to stick around and be
     reused — e.g. "Full Body A", "PT Day" — not a one-off adaptation for a
     single day. Unlike create_or_update_workout, the title is NOT prefixed
@@ -357,7 +370,8 @@ def save_to_library(title: str, kind: str, steps: list[StepIn]) -> dict:
     you've confirmed the athlete wants it gone — don't delete it first.
 
     Same `kind`/step rules as create_or_update_workout (see its docstring
-    for the full list and the strength/mobility-only exercise matching)."""
+    for the full list, the strength/mobility-only exercise matching, and
+    what `notes` does)."""
     from jim.tools.garmin import create_garmin_workout
 
     user_id = _current_user_id()
@@ -366,6 +380,7 @@ def save_to_library(title: str, kind: str, steps: list[StepIn]) -> dict:
         kind=_normalize_kind(kind),
         title=title,
         steps=[ExerciseStep(**s.model_dump()) for s in steps],
+        rationale_summary=notes,
     )
     ref = create_garmin_workout(user_id, session)
     return ref.model_dump(mode="json")

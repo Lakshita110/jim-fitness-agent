@@ -241,6 +241,42 @@ def test_pace_target_uses_value_pair_not_zone_number():
     assert "zoneNumber" not in step
 
 
+def test_secondary_target_rides_alongside_primary():
+    """Live-verified: a step can carry a secondary target (cadence range)
+    alongside its primary target (heart rate zone here)."""
+    payload = build_strength_payload(
+        session([ExerciseStep(
+            exercise="Run", duration_sec=1200, target_heart_rate_zone=2,
+            secondary_target_cadence_min=170, secondary_target_cadence_max=180,
+        )], kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert step["zoneNumber"] == 2
+    assert step["secondaryTargetType"] == {
+        "workoutTargetTypeId": 3, "workoutTargetTypeKey": "cadence",
+    }
+    assert step["secondaryTargetValueOne"] == 170
+    assert step["secondaryTargetValueTwo"] == 180
+
+
+def test_workout_notes_become_garmin_description():
+    """Live-verified: workout-level "description" field is real and stored
+    (per-segment description is silently dropped, hence whole-workout only,
+    via StructuredSession.rationale_summary — repurposed, was dead/unused)."""
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Goblet squat", reps=8)]).model_copy(
+            update={"rationale_summary": "scaled from last week, +2.5kg"}
+        )
+    )
+    assert payload["description"] == "scaled from last week, +2.5kg"
+
+
+def test_no_notes_omits_description_entirely():
+    payload = build_strength_payload(session([ExerciseStep(exercise="Goblet squat", reps=8)]))
+    assert "description" not in payload
+
+
 def test_superset_only_merges_consecutive_same_group_steps():
     """A repeated group id that ISN'T consecutive (group 1, group 2, group 1)
     is two separate supersets, not one merged group — reordering exercises

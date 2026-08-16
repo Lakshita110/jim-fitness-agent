@@ -560,6 +560,8 @@ def _build_entry(
     target_power_zone: int | None = None,
     target_pace_min_mps: float | None = None,
     target_pace_max_mps: float | None = None,
+    secondary_target_cadence_min: float | None = None,
+    secondary_target_cadence_max: float | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Build one bare step (not wrapped in any repeat block) — the shared
     building block both a single exercise's own repeat and a multi-exercise
@@ -590,6 +592,13 @@ def _build_entry(
     fields are set. Pace's exact unit convention (assumed m/s) was not
     independently confirmed against what displays on the watch — see
     ExerciseStep's docstring.
+
+    `secondary_target_cadence_min`/`_max` add a SECOND target alongside the
+    primary one — e.g. heart-rate zone as primary plus a cadence range on
+    top. Only meaningful when a primary target (heart rate or power zone)
+    is also set; live-verified accepted either way, but has no effect
+    without a primary target since Garmin still needs to know what
+    "secondary" is relative to.
 
     `classify=False` skips matching `name` against Garmin's strength exercise
     taxonomy (category/exerciseName) — that taxonomy is push-ups/squats/etc,
@@ -639,6 +648,10 @@ def _build_entry(
         entry["targetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
         entry["targetValueOne"] = target_pace_min_mps
         entry["targetValueTwo"] = target_pace_max_mps
+    if secondary_target_cadence_min is not None or secondary_target_cadence_max is not None:
+        entry["secondaryTargetType"] = {"workoutTargetTypeId": 3, "workoutTargetTypeKey": "cadence"}
+        entry["secondaryTargetValueOne"] = secondary_target_cadence_min
+        entry["secondaryTargetValueTwo"] = secondary_target_cadence_max
     if classify:
         category, exercise_name = (classified or {}).get(name) or classify_garmin_exercise(name)
         if category:
@@ -673,6 +686,8 @@ def _entry_from_step(
         target_power_zone=step.target_power_zone,
         target_pace_min_mps=step.target_pace_min_mps,
         target_pace_max_mps=step.target_pace_max_mps,
+        secondary_target_cadence_min=step.secondary_target_cadence_min,
+        secondary_target_cadence_max=step.secondary_target_cadence_max,
     )
 
 
@@ -743,15 +758,20 @@ def _emit_superset(
     return [group], order
 
 
-def _wrap_payload(name: str, sport_key: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+def _wrap_payload(
+    name: str, sport_key: str, steps: list[dict[str, Any]], notes: str = "",
+) -> dict[str, Any]:
     sport = SPORT_TYPES.get(sport_key, SPORT_TYPES["strength"])
-    return {
+    payload: dict[str, Any] = {
         "workoutName": name,
         "sportType": sport,
         "workoutSegments": [
             {"segmentOrder": 1, "sportType": sport, "workoutSteps": steps}
         ],
     }
+    if notes:
+        payload["description"] = notes
+    return payload
 
 
 def parse_exercise_sets(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -810,7 +830,7 @@ def build_strength_payload(
             (step,) = cluster
             emitted, order = _emit_step(order, step, classified=classified, classify=classify)
         steps.extend(emitted)
-    return _wrap_payload(session.title, session.kind, steps)
+    return _wrap_payload(session.title, session.kind, steps, notes=session.rationale_summary)
 
 
 def _cluster_by_superset_group(steps: list[Any]) -> list[list[Any]]:

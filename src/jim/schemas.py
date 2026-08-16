@@ -135,6 +135,16 @@ class ExerciseStep(BaseModel):
     target_pace_min_mps: float | None = None
     target_pace_max_mps: float | None = None
 
+    # A SECOND target alongside the primary one above — e.g. heart-rate zone
+    # as the primary target with a cadence range on top. "cadence" is the
+    # only secondary kind exposed here (the one live-verified); it's a
+    # zoneNumber-style workoutTargetTypeId (3) but — unlike the HR/power
+    # zone targets — takes an explicit low/high value pair, same shape as
+    # the pace target. Only meaningful alongside target_heart_rate_zone or
+    # target_power_zone; ignored on a step with neither set.
+    secondary_target_cadence_min: float | None = None
+    secondary_target_cadence_max: float | None = None
+
     # The model routinely sends explicit `null` for `sets` on a duration-only
     # step (e.g. a plank) instead of omitting the key — a bare `int` field
     # rejects that outright, and _parse_draft drops the WHOLE day on any one
@@ -156,6 +166,13 @@ class StructuredSession(BaseModel):
     title: str
     steps: list[ExerciseStep] = []
     est_duration_min: float = Field(default=0.0, ge=0)
+
+    # A note visible on the workout itself in Garmin, separate from its
+    # title — e.g. coaching context ("scaled from last week, +2.5kg").
+    # Live-verified working at the whole-workout level; a per-segment
+    # description field also exists in Garmin's schema but silently drops
+    # whatever's sent to it, so this is intentionally whole-workout only,
+    # not per-step. See tools.garmin._wrap_payload for where this lands.
     rationale_summary: str = ""
 
     # Same failure mode as ExerciseStep.sets — a rest day with nothing to

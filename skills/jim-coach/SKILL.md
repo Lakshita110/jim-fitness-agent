@@ -149,6 +149,14 @@ A few more per-step options, all optional and independent of each other:
   with an athlete, ask them to confirm it shows the pace they expect on
   their watch — accepted by Garmin, but the unit convention wasn't
   independently confirmed against the actual display.
+- `secondary_target_cadence_min` / `_max`: a second target riding alongside
+  a heart rate or power zone target on the same step — e.g. HR zone as the
+  main target, cadence range on top. Does nothing without one of those set.
+
+`notes` (a separate parameter on both tools, not a step field) puts a short
+note on the workout itself, distinct from its title — coaching context like
+"scaled down from last week, elbow's still sore." Optional, whole-workout
+only (there's no per-step or per-superset equivalent).
 
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 
