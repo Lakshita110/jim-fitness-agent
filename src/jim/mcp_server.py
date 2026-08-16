@@ -267,7 +267,7 @@ def _debug_probe_step(
         step["endCondition"] = {"conditionTypeId": 2, "conditionTypeKey": "time"}
         step["endConditionValue"] = 30
     if target_type_id is not None:
-        step["targetType"] = {"targetTypeId": target_type_id, "targetTypeKey": "probe"}
+        step["targetType"] = {"workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": "probe"}
         if target_value_one is not None:
             step["targetValueOne"] = target_value_one
         if target_value_two is not None:
