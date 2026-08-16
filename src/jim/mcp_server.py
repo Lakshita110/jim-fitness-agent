@@ -255,7 +255,9 @@ def _debug_probe_zone(target_type_id: int, zone_number: int) -> dict:
                 "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
                 "endConditionValue": 30,
                 "description": "probe",
-                "targetType": {"workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": "probe"},
+                "targetType": {
+                    "workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": "probe",
+                },
                 "zoneNumber": zone_number,
             }],
         }],
