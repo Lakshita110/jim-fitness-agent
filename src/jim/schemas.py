@@ -91,6 +91,20 @@ class ExerciseStep(BaseModel):
     # inside one RepeatGroupDTO, which is exactly what grouping does here.
     superset_group: int | None = None
 
+    # Consecutive steps sharing the same non-null `pyramid_group` (and the
+    # same `pyramid_rounds`) get wrapped in an OUTER repeat block, around
+    # whatever those steps would already have built (a single exercise's
+    # own repeat, a superset, or a plain sequence) — a repeat-of-repeats.
+    # Live-verified: a RepeatGroupDTO can itself contain another
+    # RepeatGroupDTO. Use this for a genuine nested structure — e.g. "for 3
+    # total rounds: 2x8 squats, then 12 lunges" needs squats doubled INSIDE
+    # each of the 3 outer rounds, which superset_group alone can't express
+    # (that only wraps steps once, at one level). Independent of
+    # superset_group — a pyramid_group's steps can also share a
+    # superset_group if the inner block is itself a superset.
+    pyramid_group: int | None = None
+    pyramid_rounds: int | None = None
+
     # A true press-to-continue rest step (Garmin's own stepType, not a timed
     # interval standing in for one) — the athlete taps the watch to advance
     # instead of waiting out a fixed timer. When set, `reps`/`duration_sec`/
@@ -111,10 +125,19 @@ class ExerciseStep(BaseModel):
     role: Literal["warmup", "interval", "cooldown", "recovery", "other", "main"] = "interval"
 
     # Distance-based ending ("run 5km") as an alternative to reps/
-    # duration_sec — whichever of reps/duration_sec/distance_m is set wins,
-    # in that priority order (matches tools.garmin._build_entry). Meters.
-    # Live-verified: conditionTypeId 3, key "distance".
+    # duration_sec — whichever of reps/distance_m/end_at_heart_rate_bpm/
+    # duration_sec is set wins, in that priority order (matches
+    # tools.garmin._build_entry). Meters. Live-verified: conditionTypeId 3,
+    # key "distance".
     distance_m: float | None = None
+
+    # Ends the step once heart rate reaches this bpm, instead of a fixed
+    # time — "recover until HR drops to 130," typically paired with
+    # role="recovery". Live-verified: conditionTypeId 6, key "heart.rate".
+    # Whether Garmin treats this as "until at/below" or "until at/above" the
+    # value wasn't independently confirmed (the API accepted it without
+    # complaint either way) — check the first real one against the watch.
+    end_at_heart_rate_bpm: int | None = None
 
     # Heart rate / power zone target for this step (Garmin's own per-athlete
     # zone numbers, typically 1-5) — e.g. "Zone 2 for 20 min". At most one of

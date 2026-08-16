@@ -277,6 +277,101 @@ def test_no_notes_omits_description_entirely():
     assert "description" not in payload
 
 
+def test_heart_rate_end_condition():
+    """Live-verified: conditionTypeId 6, key "heart.rate" — ends a step
+    once heart rate reaches the given bpm, instead of a fixed timer."""
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Recover", role="recovery", end_at_heart_rate_bpm=130)],
+                kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["endCondition"] == {"conditionTypeId": 6, "conditionTypeKey": "heart.rate"}
+    assert step["endConditionValue"] == 130
+
+
+def test_heart_rate_end_condition_loses_to_reps_and_distance():
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="X", reps=10, end_at_heart_rate_bpm=130)])
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["endCondition"]["conditionTypeKey"] == "reps"
+
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="X", distance_m=1000, end_at_heart_rate_bpm=130)],
+                kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["endCondition"]["conditionTypeKey"] == "distance"
+
+
+def test_pyramid_group_wraps_an_inner_block_in_an_outer_repeat():
+    """The exact reported use case: "for 3 total rounds, 2x8 squats then
+    12 lunges" — squats need their OWN repeat (2) nested inside the outer
+    3-round repeat, which superset_group alone can't express. Live-verified
+    a RepeatGroupDTO can contain another RepeatGroupDTO."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Squat", sets=2, reps=8,
+                         pyramid_group=1, pyramid_rounds=3),
+            ExerciseStep(exercise="Lunge", reps=12,
+                         pyramid_group=1, pyramid_rounds=3),
+        ])
+    )
+    (outer,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert outer["type"] == "RepeatGroupDTO"
+    assert outer["numberOfIterations"] == 3
+    inner = outer["workoutSteps"]
+    assert len(inner) == 2
+    assert inner[0]["type"] == "RepeatGroupDTO"  # squat's own 2x repeat, nested
+    assert inner[0]["numberOfIterations"] == 2
+    assert inner[0]["workoutSteps"][0]["description"] == "Squat"
+    assert inner[1]["type"] == "ExecutableStepDTO"  # lunge, no own repeat (sets=1)
+    assert inner[1]["description"] == "Lunge"
+
+
+def test_pyramid_group_with_a_superset_inside():
+    """pyramid_group and superset_group compose: an outer repeat wrapping
+    an inner superset (two exercises sharing one round)."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Wall sit", sets=1, duration_sec=30,
+                         pyramid_group=1, pyramid_rounds=3, superset_group=1),
+            ExerciseStep(exercise="Row", sets=1, reps=10,
+                         pyramid_group=1, pyramid_rounds=3, superset_group=1),
+        ])
+    )
+    (outer,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert outer["type"] == "RepeatGroupDTO"
+    assert outer["numberOfIterations"] == 3
+    (inner_superset,) = outer["workoutSteps"]
+    assert inner_superset["type"] == "RepeatGroupDTO"
+    assert len(inner_superset["workoutSteps"]) == 2
+
+
+def test_pyramid_group_does_not_disturb_surrounding_ungrouped_steps():
+    """Steps before/after a pyramid_group block, and unrelated superset
+    blocks, must still cluster and emit exactly as before."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Warmup jog", duration_sec=300),
+            ExerciseStep(exercise="Squat", sets=2, reps=8,
+                         pyramid_group=1, pyramid_rounds=3),
+            ExerciseStep(exercise="Lunge", reps=12,
+                         pyramid_group=1, pyramid_rounds=3),
+            ExerciseStep(exercise="Wall sit", sets=3, duration_sec=30, superset_group=2),
+            ExerciseStep(exercise="Row", sets=3, reps=10, superset_group=2),
+            ExerciseStep(exercise="Cooldown jog", duration_sec=300),
+        ])
+    )
+    steps = payload["workoutSegments"][0]["workoutSteps"]
+    assert len(steps) == 4  # warmup, pyramid block, superset block, cooldown
+    assert steps[0]["description"] == "Warmup jog"
+    assert steps[1]["numberOfIterations"] == 3  # the pyramid block
+    assert steps[2]["numberOfIterations"] == 3  # the unrelated superset block
+    assert len(steps[2]["workoutSteps"]) == 2
+    assert steps[3]["description"] == "Cooldown jog"
+
+
 def test_superset_only_merges_consecutive_same_group_steps():
     """A repeated group id that ISN'T consecutive (group 1, group 2, group 1)
     is two separate supersets, not one merged group — reordering exercises

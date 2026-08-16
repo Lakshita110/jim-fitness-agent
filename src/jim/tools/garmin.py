@@ -562,6 +562,7 @@ def _build_entry(
     target_pace_max_mps: float | None = None,
     secondary_target_cadence_min: float | None = None,
     secondary_target_cadence_max: float | None = None,
+    end_at_heart_rate_bpm: int | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Build one bare step (not wrapped in any repeat block) — the shared
     building block both a single exercise's own repeat and a multi-exercise
@@ -569,10 +570,13 @@ def _build_entry(
     for the two ways this gets wrapped.
 
     End condition priority when more than one is set: reps, then distance_m,
-    then time_sec (falling back to a 60s default if none are set at all).
-    Condition type IDs, all live-verified: 2 = time, 3 = distance,
-    7 = iterations, 10 = reps — numeric id is mandatory; the value goes in
-    step-level endConditionValue (meters for distance).
+    then end_at_heart_rate_bpm, then time_sec (falling back to a 60s default
+    if none are set at all). Condition type IDs, all live-verified: 2 =
+    time, 3 = distance, 6 = heart.rate, 7 = iterations, 10 = reps — numeric
+    id is mandatory; the value goes in step-level endConditionValue (meters
+    for distance, bpm for heart rate). Whether Garmin treats the heart-rate
+    condition as "until at/below" or "until at/above" the value wasn't
+    independently confirmed.
 
     `self_paced_rest=True` builds Garmin's actual press-to-continue rest
     step (stepTypeId 5 "rest", endCondition conditionTypeId 1 "lap.button")
@@ -624,6 +628,9 @@ def _build_entry(
     elif distance_m is not None:
         end_condition = {"conditionTypeId": 3, "conditionTypeKey": "distance"}
         end_value = distance_m
+    elif end_at_heart_rate_bpm is not None:
+        end_condition = {"conditionTypeId": 6, "conditionTypeKey": "heart.rate"}
+        end_value = end_at_heart_rate_bpm
     else:
         end_condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
         end_value = time_sec or 60
@@ -688,6 +695,7 @@ def _entry_from_step(
         target_pace_max_mps=step.target_pace_max_mps,
         secondary_target_cadence_min=step.secondary_target_cadence_min,
         secondary_target_cadence_max=step.secondary_target_cadence_max,
+        end_at_heart_rate_bpm=step.end_at_heart_rate_bpm,
     )
 
 
@@ -821,32 +829,108 @@ def build_strength_payload(
     classified = classify_all([s.exercise for s in session.steps], resolver) if classify else {}
     steps: list[dict[str, Any]] = []
     order = 1
-    for cluster in _cluster_by_superset_group(session.steps):
-        if len(cluster) > 1:
-            emitted, order = _emit_superset(
-                order, cluster, classified=classified, classify=classify,
+    for is_pyramid, segment in _split_pyramid_segments(session.steps):
+        if is_pyramid:
+            emitted, order = _emit_pyramid(
+                order, segment, classified=classified, classify=classify,
             )
+            steps.extend(emitted)
         else:
-            (step,) = cluster
-            emitted, order = _emit_step(order, step, classified=classified, classify=classify)
-        steps.extend(emitted)
+            for cluster in _cluster_by(segment, "superset_group"):
+                emitted, order = _emit_inner(
+                    order, cluster, classified=classified, classify=classify,
+                )
+                steps.extend(emitted)
     return _wrap_payload(session.title, session.kind, steps, notes=session.rationale_summary)
 
 
-def _cluster_by_superset_group(steps: list[Any]) -> list[list[Any]]:
-    """Group consecutive steps that share a non-null superset_group into one
-    cluster each; every other step is its own single-item cluster. Only
-    consecutive steps are merged — a group id repeated non-consecutively
-    (e.g. group 1, group 2, group 1) is treated as two separate supersets
-    rather than silently reordered to merge them, since that would move
-    exercises the athlete/Claude put in a specific order."""
+def _split_pyramid_segments(steps: list[Any]) -> list[tuple[bool, list[Any]]]:
+    """Split into (is_pyramid, steps) segments: consecutive steps sharing
+    one non-null pyramid_group form a pyramid segment; any run of
+    consecutive non-pyramid steps forms one plain segment, still intact for
+    _cluster_by(..., "superset_group") to cluster normally afterward — a
+    single `_cluster_by(steps, "pyramid_group")` pass alone would wrongly
+    fragment non-pyramid steps into one-step segments before superset
+    clustering ever saw them."""
+    segments: list[tuple[bool, list[Any]]] = []
+    for step in steps:
+        is_pyramid = step.pyramid_group is not None
+        if (
+            segments
+            and segments[-1][0] == is_pyramid
+            and (not is_pyramid or segments[-1][1][-1].pyramid_group == step.pyramid_group)
+        ):
+            segments[-1][1].append(step)
+        else:
+            segments.append((is_pyramid, [step]))
+    return segments
+
+
+def _emit_inner(
+    order: int,
+    cluster: list[Any],
+    *,
+    classified: Mapping[str, tuple[str | None, str | None]] | None = None,
+    classify: bool = True,
+) -> tuple[list[dict[str, Any]], int]:
+    """One superset_group cluster (>1 step) or a single ungrouped step,
+    emitted the normal way — the shared inner step ordinarily produces,
+    whether or not it's also wrapped by an outer pyramid_group."""
+    if len(cluster) > 1:
+        return _emit_superset(order, cluster, classified=classified, classify=classify)
+    (step,) = cluster
+    return _emit_step(order, step, classified=classified, classify=classify)
+
+
+def _emit_pyramid(
+    order: int,
+    steps: list[Any],
+    *,
+    classified: Mapping[str, tuple[str | None, str | None]] | None = None,
+    classify: bool = True,
+) -> tuple[list[dict[str, Any]], int]:
+    """A repeat-of-repeats: wrap whatever `steps` would normally build
+    (their own superset_group clusters, or plain single-exercise steps) in
+    ONE outer RepeatGroupDTO — live-verified a RepeatGroupDTO can contain
+    another RepeatGroupDTO. `steps` must already share pyramid_group (the
+    caller is responsible for clustering); `pyramid_rounds` from the first
+    step is the outer round count."""
+    rounds = steps[0].pyramid_rounds
+    group_order = order
+    order += 1  # the outer group itself takes this slot
+    inner: list[dict[str, Any]] = []
+    for cluster in _cluster_by(steps, "superset_group"):
+        emitted, order = _emit_inner(order, cluster, classified=classified, classify=classify)
+        inner.extend(emitted)
+    group = {
+        "type": "RepeatGroupDTO",
+        "stepOrder": group_order,
+        "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
+        "numberOfIterations": rounds,
+        "smartRepeat": False,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": rounds,
+        "workoutSteps": inner,
+    }
+    return [group], order
+
+
+def _cluster_by(steps: list[Any], field: str) -> list[list[Any]]:
+    """Group consecutive steps that share a non-null value for `field`
+    (superset_group or pyramid_group) into one cluster each; every other
+    step is its own single-item cluster. Only consecutive steps are merged
+    — a group id repeated non-consecutively (e.g. group 1, group 2, group 1)
+    is treated as two separate groups rather than silently reordered to
+    merge them, since that would move exercises the athlete/Claude put in a
+    specific order."""
     clusters: list[list[Any]] = []
     for step in steps:
+        value = getattr(step, field)
         if (
-            step.superset_group is not None
+            value is not None
             and clusters
             and clusters[-1]
-            and clusters[-1][-1].superset_group == step.superset_group
+            and getattr(clusters[-1][-1], field) == value
         ):
             clusters[-1].append(step)
         else:

@@ -125,6 +125,15 @@ the right order — correct sequence, but not boxed together as a round on
 the watch. A step with no `superset_group` behaves exactly as before
 (its own repeat block if `sets` > 1, otherwise flat).
 
+For a genuinely NESTED structure — "for 3 total rounds: 2x8 squats, then 12
+lunges," where squats need their own repeat INSIDE each of the 3 outer
+rounds — `superset_group` alone can't express it (it only wraps once, at
+one level). Give those steps the same `pyramid_group` integer and the same
+`pyramid_rounds`, still consecutive; it composes with `superset_group` if
+the inner block is itself a superset. Most sessions are fine with an
+ordinary superset — reach for `pyramid_group` only when a block is
+genuinely nested, not as the default way to group exercises.
+
 For a rest the athlete taps through rather than waits out on a timer, set
 `self_paced_rest: true` on that step instead of writing a plain timed step
 named "Rest" — the latter is a real timer (e.g. a fixed 20s interval), not
@@ -139,8 +148,12 @@ A few more per-step options, all optional and independent of each other:
   these, not just be the first/last step in the list, so it shows correctly
   on the watch rather than as a generic interval.
 - `distance_m`: end a step on distance (meters) instead of reps or
-  duration_sec — "run 5km." Only one of reps/distance_m/duration_sec
-  actually applies, in that priority order, if more than one is set.
+  duration_sec — "run 5km." Only one of reps/distance_m/
+  end_at_heart_rate_bpm/duration_sec actually applies, in that priority
+  order, if more than one is set.
+- `end_at_heart_rate_bpm`: end a step once heart rate reaches this bpm
+  instead of a fixed timer — "recover until HR drops to 130," typically
+  with `role: "recovery"`.
 - `target_heart_rate_zone` / `target_power_zone`: the athlete's own Garmin
   zone number (usually 1-5) for a step — "Zone 2 for 20 min." Set at most
   one per step.

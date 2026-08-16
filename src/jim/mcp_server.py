@@ -140,6 +140,15 @@ class StepIn(BaseModel):
     # All steps in a group should share the same `sets` value (the shared
     # round count); the first one wins if they don't agree.
     superset_group: int | None = None
+    # Consecutive steps sharing the same pyramid_group (and pyramid_rounds)
+    # get wrapped in an OUTER repeat block around whatever they'd normally
+    # build — a repeat-of-repeats. Use for a genuinely nested structure
+    # ("for 3 total rounds: 2x8 squats, then 12 lunges" — squats doubled
+    # INSIDE each of the 3 outer rounds), which superset_group alone can't
+    # express. Independent of superset_group — can combine both if the
+    # inner block is itself a superset.
+    pyramid_group: int | None = None
+    pyramid_rounds: int | None = None
     # True press-to-continue rest (Garmin's own rest stepType) instead of a
     # fixed timer — see save_to_library/create_or_update_workout's docstring.
     self_paced_rest: bool = False
@@ -151,6 +160,11 @@ class StepIn(BaseModel):
     role: Literal["warmup", "interval", "cooldown", "recovery", "other", "main"] = "interval"
     # Distance-based ending in meters ("run 5km"), instead of reps/duration_sec.
     distance_m: float | None = None
+    # Ends the step once heart rate reaches this bpm instead of a fixed
+    # time — "recover until HR drops to 130," typically with role="recovery".
+    # Whether Garmin treats this as until-at/below or until-at/above wasn't
+    # independently confirmed.
+    end_at_heart_rate_bpm: int | None = None
     # Heart rate / power zone target (Garmin's own per-athlete zone number,
     # typically 1-5) — at most one should be set; heart rate wins if both are.
     target_heart_rate_zone: int | None = None
@@ -259,23 +273,6 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
-# --- TEMP: general-purpose raw payload probe, remove after use --
-
-
-@mcp.tool
-def _debug_probe_raw(payload_json: str) -> dict:
-    """TEMPORARY. Upload a completely raw workout payload (as a JSON string)
-    and echo back exactly what Garmin stored — for exploring fields with no
-    documentation anywhere (official or reverse-engineered) without a
-    redeploy per field."""
-    import json as _json
-
-    from jim.tools.garmin import client
-
-    api = client(_current_user_id())
-    resp = api.upload_workout(_json.loads(payload_json))
-    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp}
-
 
 # --- write: create/schedule/unschedule ---------------------------------------
 
@@ -316,6 +313,16 @@ def create_or_update_workout(
     as always), and a shared superset_group is what tells it to wrap
     multiple exercises under one shared round count instead.
 
+    For a genuinely nested structure — "for 3 total rounds: 2x8 squats,
+    then 12 lunges," where squats need their own repeat count INSIDE each
+    of the 3 outer rounds — superset_group alone can't express it (it only
+    wraps once, at one level). Give the steps in that block the same
+    `pyramid_group` integer and the same `pyramid_rounds`, still
+    consecutive. It composes with superset_group: if the inner block is
+    itself a superset, set both on those steps. Most sessions don't need
+    this — reach for it only when a block is genuinely nested, not for an
+    ordinary superset (that's superset_group alone).
+
     For a rest step the athlete advances past with a tap rather than a
     fixed timer, set `self_paced_rest=True` on that step — Garmin's actual
     press-to-continue rest type, not a timed interval standing in for one.
@@ -330,7 +337,10 @@ def create_or_update_workout(
       warmup/cooldown block, not just a step you happen to put first/last.
     - `distance_m`: end the step on distance (meters) instead of reps or
       duration_sec — e.g. "run 5km." Only one of reps/distance_m/
-      duration_sec is used, in that priority order.
+      end_at_heart_rate_bpm/duration_sec is used, in that priority order.
+    - `end_at_heart_rate_bpm`: end the step once heart rate reaches this
+      bpm instead of a fixed time — "recover until HR drops to 130,"
+      typically with `role="recovery"`.
     - `target_heart_rate_zone` / `target_power_zone`: the athlete's own
       Garmin zone number (typically 1-5) for this step — "Zone 2 for 20
       min." Set at most one; heart rate wins if both are set.
