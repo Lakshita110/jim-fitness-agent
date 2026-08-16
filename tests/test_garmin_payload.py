@@ -101,6 +101,45 @@ def test_superset_wraps_multiple_exercises_in_one_repeat_group():
     assert wall_sit["stepOrder"] < row["stepOrder"]
 
 
+def test_self_paced_rest_uses_garmins_real_press_to_continue_step():
+    """Previously a "rest" step was just a timed interval standing in for
+    one (e.g. a fixed 20s timer) since there was no way to reach Garmin's
+    actual press-to-continue rest type. self_paced_rest=True builds the
+    real thing: stepTypeId 5 ("rest") + endCondition conditionTypeId 1
+    ("lap.button") — live-verified against a real account, not documented
+    anywhere. reps/duration/weight are irrelevant and should be ignored."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Rest", duration_sec=20, self_paced_rest=True),
+        ])
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["stepType"] == {"stepTypeId": 5, "stepTypeKey": "rest"}
+    assert step["endCondition"] == {"conditionTypeId": 1, "conditionTypeKey": "lap.button"}
+    assert step["endConditionValue"] is None
+    assert step["description"] == "Rest"
+    assert "category" not in step
+    assert "exerciseName" not in step
+
+
+def test_self_paced_rest_works_inside_a_superset():
+    """The exact reported use case: exercise, exercise, self-paced rest, all
+    sharing one round via superset_group."""
+    payload = build_strength_payload(
+        session([
+            ExerciseStep(exercise="Wall sit", sets=3, duration_sec=30, superset_group=1),
+            ExerciseStep(exercise="Row", sets=3, reps=10, superset_group=1),
+            ExerciseStep(exercise="Rest", sets=3, self_paced_rest=True, superset_group=1),
+        ])
+    )
+    (group,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert group["type"] == "RepeatGroupDTO"
+    assert len(group["workoutSteps"]) == 3
+    rest_step = group["workoutSteps"][2]
+    assert rest_step["stepType"] == {"stepTypeId": 5, "stepTypeKey": "rest"}
+    assert rest_step["endCondition"]["conditionTypeKey"] == "lap.button"
+
+
 def test_superset_only_merges_consecutive_same_group_steps():
     """A repeated group id that ISN'T consecutive (group 1, group 2, group 1)
     is two separate supersets, not one merged group — reordering exercises

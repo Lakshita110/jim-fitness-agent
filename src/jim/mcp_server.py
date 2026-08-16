@@ -139,6 +139,9 @@ class StepIn(BaseModel):
     # All steps in a group should share the same `sets` value (the shared
     # round count); the first one wins if they don't agree.
     superset_group: int | None = None
+    # True press-to-continue rest (Garmin's own rest stepType) instead of a
+    # fixed timer — see save_to_library/create_or_update_workout's docstring.
+    self_paced_rest: bool = False
 
 
 # --- read: history, readiness, calendar, workout library --------------------
@@ -231,38 +234,6 @@ def get_saved_workout(workout_id: str) -> dict:
     return get_garmin_workout_detail(_current_user_id(), workout_id)
 
 
-# --- TEMP: probing the real lap-button/rest end condition, remove after use --
-
-
-@mcp.tool
-def _debug_probe_rest_condition(for_date: str, condition_id: int) -> dict:
-    """TEMPORARY. Create a minimal stepTypeId=5 ("rest") step with a raw
-    endCondition id so the response can be read back to find Garmin's real
-    self-paced (press-to-continue / "lap.button") condition id — no official
-    docs exist for this, only conflicting reverse-engineered guesses."""
-    from jim.tools.garmin import client
-
-    api = client(_current_user_id())
-    payload = {
-        "workoutName": f"REST PROBE {condition_id}",
-        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
-        "workoutSegments": [{
-            "segmentOrder": 1,
-            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
-            "workoutSteps": [{
-                "type": "ExecutableStepDTO",
-                "stepOrder": 1,
-                "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
-                "endCondition": {"conditionTypeId": condition_id, "conditionTypeKey": "probe"},
-                "endConditionValue": None,
-                "description": "probe rest",
-            }],
-        }],
-    }
-    resp = api.upload_workout(payload)
-    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp.get("workoutSegments")}
-
-
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
@@ -301,6 +272,13 @@ def create_or_update_workout(
     superset_group each get their own individual repeat when sets>1, same
     as always), and a shared superset_group is what tells it to wrap
     multiple exercises under one shared round count instead.
+
+    For a rest step the athlete advances past with a tap rather than a
+    fixed timer, set `self_paced_rest=True` on that step — Garmin's actual
+    press-to-continue rest type, not a timed interval standing in for one.
+    reps/duration_sec/weight_kg are ignored on that step. Works inside a
+    superset_group too (e.g. exercise, exercise, self-paced rest, all
+    sharing one round).
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,

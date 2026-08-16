@@ -125,6 +125,14 @@ the right order — correct sequence, but not boxed together as a round on
 the watch. A step with no `superset_group` behaves exactly as before
 (its own repeat block if `sets` > 1, otherwise flat).
 
+For a rest the athlete taps through rather than waits out on a timer, set
+`self_paced_rest: true` on that step instead of writing a plain timed step
+named "Rest" — the latter is a real timer (e.g. a fixed 20s interval), not
+actually self-paced, even though it looks similar in a written draft.
+reps/duration_sec/weight_kg don't matter on a self-paced step and are
+ignored. This works as one of the entries inside a superset_group too —
+e.g. wall sit, row, self-paced rest, all one round.
+
 ## 6. `set_constraints` replaces the whole document — never lose what's there
 
 There's no merge behavior: whatever you send becomes the entire constraints

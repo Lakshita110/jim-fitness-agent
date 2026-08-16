@@ -91,6 +91,16 @@ class ExerciseStep(BaseModel):
     # inside one RepeatGroupDTO, which is exactly what grouping does here.
     superset_group: int | None = None
 
+    # A true press-to-continue rest step (Garmin's own stepType, not a timed
+    # interval standing in for one) — the athlete taps the watch to advance
+    # instead of waiting out a fixed timer. When set, `reps`/`duration_sec`/
+    # `weight_kg` are ignored and no exercise-taxonomy matching applies,
+    # since this isn't a movement. Live-verified: stepTypeId 5 ("rest") +
+    # endCondition conditionTypeId 1 ("lap.button") is the real self-paced
+    # condition — not something documented anywhere, found by testing
+    # against a real account (see tools.garmin._build_entry).
+    self_paced_rest: bool = False
+
     # The model routinely sends explicit `null` for `sets` on a duration-only
     # step (e.g. a plank) instead of omitting the key — a bare `int` field
     # rejects that outright, and _parse_draft drops the WHOLE day on any one

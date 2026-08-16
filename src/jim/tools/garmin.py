@@ -535,14 +535,23 @@ def _build_entry(
     weight_kg: float | None,
     classified: Mapping[str, tuple[str | None, str | None]] | None = None,
     classify: bool = True,
+    self_paced_rest: bool = False,
 ) -> tuple[dict[str, Any], int]:
-    """Build one bare ExecutableStepDTO (not wrapped in any repeat block) —
-    the shared building block both a single exercise's own repeat and a
-    multi-exercise superset's shared repeat are made of. See _emit_step and
-    _emit_superset for the two ways this gets wrapped.
+    """Build one bare step (not wrapped in any repeat block) — the shared
+    building block both a single exercise's own repeat and a multi-exercise
+    superset's shared repeat are made of. See _emit_step and _emit_superset
+    for the two ways this gets wrapped.
 
     Condition type IDs: 2 = time, 7 = iterations, 10 = reps — numeric id is
     mandatory; the value goes in step-level endConditionValue.
+
+    `self_paced_rest=True` builds Garmin's actual press-to-continue rest
+    step (stepTypeId 5 "rest", endCondition conditionTypeId 1 "lap.button")
+    instead of a timed interval standing in for one — the athlete taps the
+    watch to advance rather than waiting out a fixed timer. Live-verified
+    against a real account; not documented anywhere. reps/time_sec/weight_kg
+    and exercise classification are all irrelevant for a rest step and are
+    skipped regardless of `classify`.
 
     `classify=False` skips matching `name` against Garmin's strength exercise
     taxonomy (category/exerciseName) — that taxonomy is push-ups/squats/etc,
@@ -551,13 +560,24 @@ def _build_entry(
     runs, rides — activities, not exercises) pass classify=False and rely on
     the plain `description` instead; strength/mobility sessions still get
     classified since their steps really are Garmin exercise-library moves."""
+    if self_paced_rest:
+        entry = {
+            "type": "ExecutableStepDTO",
+            "stepOrder": order,
+            "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
+            "endCondition": {"conditionTypeId": 1, "conditionTypeKey": "lap.button"},
+            "endConditionValue": None,
+            "description": name,
+        }
+        return entry, order + 1
+
     if reps:
         end_condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
         end_value: float = reps
     else:
         end_condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
         end_value = time_sec or 60
-    entry: dict[str, Any] = {
+    entry = {
         "type": "ExecutableStepDTO",
         "stepOrder": order,
         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
@@ -587,6 +607,7 @@ def _emit_step(
     weight_kg: float | None,
     classified: Mapping[str, tuple[str | None, str | None]] | None = None,
     classify: bool = True,
+    self_paced_rest: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """One exercise, wrapped in its own RepeatGroupDTO when sets>1 —
     Garmin's format for "Wall sit x5" as a single block, one exercise. For a
@@ -595,7 +616,7 @@ def _emit_step(
     express that."""
     entry, order = _build_entry(
         order, name=name, reps=reps, time_sec=time_sec, weight_kg=weight_kg,
-        classified=classified, classify=classify,
+        classified=classified, classify=classify, self_paced_rest=self_paced_rest,
     )
     if sets > 1:
         group = {
@@ -639,6 +660,7 @@ def _emit_superset(
         entry, order = _build_entry(
             order, name=step.exercise, reps=step.reps, time_sec=step.duration_sec,
             weight_kg=step.weight_kg, classified=classified, classify=classify,
+            self_paced_rest=step.self_paced_rest,
         )
         entries.append(entry)
     group = {
@@ -728,6 +750,7 @@ def build_strength_payload(
                 weight_kg=step.weight_kg,
                 classified=classified,
                 classify=classify,
+                self_paced_rest=step.self_paced_rest,
             )
         steps.extend(emitted)
     return _wrap_payload(session.title, session.kind, steps)
