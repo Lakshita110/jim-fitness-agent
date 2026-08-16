@@ -252,6 +252,35 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
+# --- TEMP: checking for stepTypeIds beyond the known 6, remove after use --
+
+
+@mcp.tool
+def _debug_probe_step_type(step_type_id: int) -> dict:
+    """TEMPORARY."""
+    from jim.tools.garmin import client
+
+    payload = {
+        "workoutName": "STEPTYPE PROBE",
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": step_type_id, "stepTypeKey": "probe"},
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 30,
+                "description": "probe",
+            }],
+        }],
+    }
+    api = client(_current_user_id())
+    resp = api.upload_workout(payload)
+    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp.get("workoutSegments")}
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
