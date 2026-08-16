@@ -24,6 +24,7 @@ for the isolation check this depends on.
 """
 
 from datetime import date, timedelta
+from typing import Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -142,6 +143,21 @@ class StepIn(BaseModel):
     # True press-to-continue rest (Garmin's own rest stepType) instead of a
     # fixed timer — see save_to_library/create_or_update_workout's docstring.
     self_paced_rest: bool = False
+    # Garmin's own step role, not just descriptive text — "warmup"/"cooldown"/
+    # "recovery" show correctly on the watch instead of being lumped in as
+    # a generic interval. Default "interval" is the old, only, behavior.
+    role: Literal["warmup", "interval", "cooldown", "recovery"] = "interval"
+    # Distance-based ending in meters ("run 5km"), instead of reps/duration_sec.
+    distance_m: float | None = None
+    # Heart rate / power zone target (Garmin's own per-athlete zone number,
+    # typically 1-5) — at most one should be set; heart rate wins if both are.
+    target_heart_rate_zone: int | None = None
+    target_power_zone: int | None = None
+    # Pace target as a speed range in meters/second (see StructuredSession's
+    # ExerciseStep docstring for the unit caveat — accepted by Garmin, but
+    # not independently confirmed against what displays on the watch).
+    target_pace_min_mps: float | None = None
+    target_pace_max_mps: float | None = None
 
 
 # --- read: history, readiness, calendar, workout library --------------------
@@ -234,37 +250,6 @@ def get_saved_workout(workout_id: str) -> dict:
     return get_garmin_workout_detail(_current_user_id(), workout_id)
 
 
-# --- TEMP: confirming zoneNumber works for power/pace zones too, remove after --
-
-
-@mcp.tool
-def _debug_probe_zone(target_type_id: int, zone_number: int) -> dict:
-    """TEMPORARY."""
-    from jim.tools.garmin import client
-
-    payload = {
-        "workoutName": "ZONE PROBE",
-        "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
-        "workoutSegments": [{
-            "segmentOrder": 1,
-            "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
-            "workoutSteps": [{
-                "type": "ExecutableStepDTO",
-                "stepOrder": 1,
-                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                "endConditionValue": 30,
-                "description": "probe",
-                "targetType": {
-                    "workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": "probe",
-                },
-                "zoneNumber": zone_number,
-            }],
-        }],
-    }
-    api = client(_current_user_id())
-    resp = api.upload_workout(payload)
-    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp.get("workoutSegments")}
 
 
 # --- write: create/schedule/unschedule ---------------------------------------
@@ -312,6 +297,23 @@ def create_or_update_workout(
     reps/duration_sec/weight_kg are ignored on that step. Works inside a
     superset_group too (e.g. exercise, exercise, self-paced rest, all
     sharing one round).
+
+    Other per-step options, all optional:
+    - `role`: "warmup", "cooldown", or "recovery" instead of the default
+      "interval" — shows correctly on the watch as that real step type
+      rather than a generic interval. Use for an actual warmup/cooldown
+      block, not just a step you happen to put first/last.
+    - `distance_m`: end the step on distance (meters) instead of reps or
+      duration_sec — e.g. "run 5km." Only one of reps/distance_m/
+      duration_sec is used, in that priority order.
+    - `target_heart_rate_zone` / `target_power_zone`: the athlete's own
+      Garmin zone number (typically 1-5) for this step — "Zone 2 for 20
+      min." Set at most one; heart rate wins if both are set.
+    - `target_pace_min_mps` / `target_pace_max_mps`: a pace target as a
+      speed range in meters/second — "5x400m @ 5k pace." Ask the athlete
+      to confirm this displays as the pace they expect the first time you
+      use it; the unit convention here wasn't independently verified
+      against the watch display, only that Garmin accepts it.
 
     The title is auto-prefixed ("Jim · ...") so this one-off adaptation is
     distinguishable from the athlete's real saved workouts (Full Body A,

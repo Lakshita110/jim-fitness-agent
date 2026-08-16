@@ -526,6 +526,16 @@ SPORT_TYPES: dict[str, dict[str, Any]] = {
 _TAXONOMY_CLASSIFIED_KINDS = {"strength", "mobility"}
 
 
+# Garmin's own step role (stepType). "interval" is the default every step
+# used before role support existed. Live-verified against a real account.
+_STEP_TYPES: dict[str, dict[str, Any]] = {
+    "warmup": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+    "cooldown": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
+    "interval": {"stepTypeId": 3, "stepTypeKey": "interval"},
+    "recovery": {"stepTypeId": 4, "stepTypeKey": "recovery"},
+}
+
+
 def _build_entry(
     order: int,
     *,
@@ -536,22 +546,42 @@ def _build_entry(
     classified: Mapping[str, tuple[str | None, str | None]] | None = None,
     classify: bool = True,
     self_paced_rest: bool = False,
+    role: str = "interval",
+    distance_m: float | None = None,
+    target_heart_rate_zone: int | None = None,
+    target_power_zone: int | None = None,
+    target_pace_min_mps: float | None = None,
+    target_pace_max_mps: float | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Build one bare step (not wrapped in any repeat block) — the shared
     building block both a single exercise's own repeat and a multi-exercise
     superset's shared repeat are made of. See _emit_step and _emit_superset
     for the two ways this gets wrapped.
 
-    Condition type IDs: 2 = time, 7 = iterations, 10 = reps — numeric id is
-    mandatory; the value goes in step-level endConditionValue.
+    End condition priority when more than one is set: reps, then distance_m,
+    then time_sec (falling back to a 60s default if none are set at all).
+    Condition type IDs, all live-verified: 2 = time, 3 = distance,
+    7 = iterations, 10 = reps — numeric id is mandatory; the value goes in
+    step-level endConditionValue (meters for distance).
 
     `self_paced_rest=True` builds Garmin's actual press-to-continue rest
     step (stepTypeId 5 "rest", endCondition conditionTypeId 1 "lap.button")
     instead of a timed interval standing in for one — the athlete taps the
     watch to advance rather than waiting out a fixed timer. Live-verified
-    against a real account; not documented anywhere. reps/time_sec/weight_kg
-    and exercise classification are all irrelevant for a rest step and are
-    skipped regardless of `classify`.
+    against a real account; not documented anywhere. When set, this
+    overrides `role`, every end-condition field, weight, target zones, and
+    exercise classification — none of those apply to a rest step.
+
+    `role` picks the stepType (see _STEP_TYPES) — a real warmup/cooldown/
+    recovery block shows correctly on the watch instead of every step being
+    a generic interval.
+
+    `target_heart_rate_zone`/`target_power_zone` (Garmin's own zoneNumber,
+    typically 1-5) and `target_pace_min_mps`/`target_pace_max_mps` (a speed
+    range) all live-verified as accepted; heart rate wins if both zone
+    fields are set. Pace's exact unit convention (assumed m/s) was not
+    independently confirmed against what displays on the watch — see
+    ExerciseStep's docstring.
 
     `classify=False` skips matching `name` against Garmin's strength exercise
     taxonomy (category/exerciseName) — that taxonomy is push-ups/squats/etc,
@@ -574,13 +604,16 @@ def _build_entry(
     if reps:
         end_condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
         end_value: float = reps
+    elif distance_m is not None:
+        end_condition = {"conditionTypeId": 3, "conditionTypeKey": "distance"}
+        end_value = distance_m
     else:
         end_condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
         end_value = time_sec or 60
     entry = {
         "type": "ExecutableStepDTO",
         "stepOrder": order,
-        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "stepType": _STEP_TYPES.get(role, _STEP_TYPES["interval"]),
         "endCondition": end_condition,
         "endConditionValue": end_value,
         "description": name,
@@ -588,6 +621,16 @@ def _build_entry(
     if weight_kg is not None:
         entry["weightValue"] = weight_kg
         entry["weightUnit"] = {"unitKey": "kilogram"}
+    if target_heart_rate_zone is not None:
+        entry["targetType"] = {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"}
+        entry["zoneNumber"] = target_heart_rate_zone
+    elif target_power_zone is not None:
+        entry["targetType"] = {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"}
+        entry["zoneNumber"] = target_power_zone
+    elif target_pace_min_mps is not None or target_pace_max_mps is not None:
+        entry["targetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+        entry["targetValueOne"] = target_pace_min_mps
+        entry["targetValueTwo"] = target_pace_max_mps
     if classify:
         category, exercise_name = (classified or {}).get(name) or classify_garmin_exercise(name)
         if category:
@@ -597,36 +640,56 @@ def _build_entry(
     return entry, order + 1
 
 
-def _emit_step(
+def _entry_from_step(
     order: int,
+    step: Any,
     *,
-    name: str,
-    sets: int,
-    reps: int | None,
-    time_sec: int | None,
-    weight_kg: float | None,
     classified: Mapping[str, tuple[str | None, str | None]] | None = None,
     classify: bool = True,
-    self_paced_rest: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """_build_entry, but reading every field off an ExerciseStep-like object
+    instead of a long parameter list — the shared adapter _emit_step and
+    _emit_superset both use."""
+    return _build_entry(
+        order,
+        name=step.exercise,
+        reps=step.reps,
+        time_sec=step.duration_sec,
+        weight_kg=step.weight_kg,
+        classified=classified,
+        classify=classify,
+        self_paced_rest=step.self_paced_rest,
+        role=step.role,
+        distance_m=step.distance_m,
+        target_heart_rate_zone=step.target_heart_rate_zone,
+        target_power_zone=step.target_power_zone,
+        target_pace_min_mps=step.target_pace_min_mps,
+        target_pace_max_mps=step.target_pace_max_mps,
+    )
+
+
+def _emit_step(
+    order: int,
+    step: Any,
+    *,
+    classified: Mapping[str, tuple[str | None, str | None]] | None = None,
+    classify: bool = True,
 ) -> tuple[list[dict[str, Any]], int]:
     """One exercise, wrapped in its own RepeatGroupDTO when sets>1 —
     Garmin's format for "Wall sit x5" as a single block, one exercise. For a
     superset (two-plus exercises sharing one round count), see
     _emit_superset instead; a repeat block wrapping only one exercise can't
     express that."""
-    entry, order = _build_entry(
-        order, name=name, reps=reps, time_sec=time_sec, weight_kg=weight_kg,
-        classified=classified, classify=classify, self_paced_rest=self_paced_rest,
-    )
-    if sets > 1:
+    entry, order = _entry_from_step(order, step, classified=classified, classify=classify)
+    if step.sets > 1:
         group = {
             "type": "RepeatGroupDTO",
             "stepOrder": entry["stepOrder"],
             "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
-            "numberOfIterations": sets,
+            "numberOfIterations": step.sets,
             "smartRepeat": False,
             "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
-            "endConditionValue": sets,
+            "endConditionValue": step.sets,
             "workoutSteps": [{**entry, "stepOrder": order}],
         }
         order += 1
@@ -657,11 +720,7 @@ def _emit_superset(
     order += 1  # the group itself takes this slot; each exercise gets the next ones
     entries: list[dict[str, Any]] = []
     for step in steps:
-        entry, order = _build_entry(
-            order, name=step.exercise, reps=step.reps, time_sec=step.duration_sec,
-            weight_kg=step.weight_kg, classified=classified, classify=classify,
-            self_paced_rest=step.self_paced_rest,
-        )
+        entry, order = _entry_from_step(order, step, classified=classified, classify=classify)
         entries.append(entry)
     group = {
         "type": "RepeatGroupDTO",
@@ -741,17 +800,7 @@ def build_strength_payload(
             )
         else:
             (step,) = cluster
-            emitted, order = _emit_step(
-                order,
-                name=step.exercise,
-                sets=step.sets,
-                reps=step.reps,
-                time_sec=step.duration_sec,
-                weight_kg=step.weight_kg,
-                classified=classified,
-                classify=classify,
-                self_paced_rest=step.self_paced_rest,
-            )
+            emitted, order = _emit_step(order, step, classified=classified, classify=classify)
         steps.extend(emitted)
     return _wrap_payload(session.title, session.kind, steps)
 

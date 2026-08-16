@@ -101,6 +101,38 @@ class ExerciseStep(BaseModel):
     # against a real account (see tools.garmin._build_entry).
     self_paced_rest: bool = False
 
+    # Garmin's own step role — a distinct stepType, not just descriptive
+    # text. Every step defaulted to "interval" before; a real warmup/
+    # cooldown/recovery block now shows correctly on the watch instead of
+    # being lumped in as a generic interval. Live-verified: stepTypeId
+    # 1=warmup, 2=cooldown, 4=recovery, 3=interval (the existing default).
+    role: Literal["warmup", "interval", "cooldown", "recovery"] = "interval"
+
+    # Distance-based ending ("run 5km") as an alternative to reps/
+    # duration_sec — whichever of reps/duration_sec/distance_m is set wins,
+    # in that priority order (matches tools.garmin._build_entry). Meters.
+    # Live-verified: conditionTypeId 3, key "distance".
+    distance_m: float | None = None
+
+    # Heart rate / power zone target for this step (Garmin's own per-athlete
+    # zone numbers, typically 1-5) — e.g. "Zone 2 for 20 min". At most one of
+    # target_heart_rate_zone/target_power_zone should be set per step; if
+    # both are, heart rate wins. Live-verified: workoutTargetTypeId
+    # 4="heart.rate.zone", 2="power.zone", both taking a plain zoneNumber.
+    target_heart_rate_zone: int | None = None
+    target_power_zone: int | None = None
+
+    # Pace target as a speed range in meters/second — e.g. "5x400m @ 5k
+    # pace". Unlike the zone targets above, Garmin's pace target
+    # (workoutTargetTypeId 6, "pace.zone") did NOT accept a zoneNumber in
+    # testing — only an explicit low/high value pair, live-confirmed to be
+    # accepted, but the exact unit convention (assumed m/s, matching
+    # distance-in-meters/duration-in-seconds elsewhere in this API) was not
+    # independently confirmed against what actually displays on the watch.
+    # Flag anything that looks off here first.
+    target_pace_min_mps: float | None = None
+    target_pace_max_mps: float | None = None
+
     # The model routinely sends explicit `null` for `sets` on a duration-only
     # step (e.g. a plank) instead of omitting the key — a bare `int` field
     # rejects that outright, and _parse_draft drops the WHOLE day on any one

@@ -140,6 +140,103 @@ def test_self_paced_rest_works_inside_a_superset():
     assert rest_step["endCondition"]["conditionTypeKey"] == "lap.button"
 
 
+def test_role_sets_the_real_stepType():
+    """Every step defaulted to a generic "interval" stepType before role
+    existed. Live-verified: warmup=1, cooldown=2, interval=3, recovery=4."""
+    for role, expected_id in [("warmup", 1), ("cooldown", 2), ("recovery", 4)]:
+        payload = build_strength_payload(
+            session([ExerciseStep(exercise="Jog", duration_sec=300, role=role)],
+                    kind="conditioning")
+        )
+        (step,) = payload["workoutSegments"][0]["workoutSteps"]
+        assert step["stepType"]["stepTypeId"] == expected_id
+        assert step["stepType"]["stepTypeKey"] == role
+
+
+def test_role_defaults_to_interval():
+    payload = build_strength_payload(session([ExerciseStep(exercise="Goblet squat", reps=8)]))
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["stepType"] == {"stepTypeId": 3, "stepTypeKey": "interval"}
+
+
+def test_distance_m_becomes_a_distance_end_condition():
+    """Live-verified: conditionTypeId 3, key "distance", value in meters."""
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Run", distance_m=5000)], kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["endCondition"] == {"conditionTypeId": 3, "conditionTypeKey": "distance"}
+    assert step["endConditionValue"] == 5000
+
+
+def test_reps_beats_distance_beats_duration_priority():
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Run", reps=10, distance_m=5000, duration_sec=300)])
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["endCondition"]["conditionTypeKey"] == "reps"
+
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Run", distance_m=5000, duration_sec=300)],
+                kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["endCondition"]["conditionTypeKey"] == "distance"
+
+
+def test_heart_rate_zone_target():
+    """Live-verified: workoutTargetTypeId 4, key "heart.rate.zone", plain zoneNumber."""
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Run", duration_sec=1200, target_heart_rate_zone=2)],
+                kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["targetType"] == {
+        "workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone",
+    }
+    assert step["zoneNumber"] == 2
+
+
+def test_power_zone_target():
+    """Live-verified: workoutTargetTypeId 2, key "power.zone", plain zoneNumber."""
+    payload = build_strength_payload(
+        session([ExerciseStep(exercise="Ride", duration_sec=1200, target_power_zone=3)],
+                kind="cycling")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["targetType"] == {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"}
+    assert step["zoneNumber"] == 3
+
+
+def test_heart_rate_zone_wins_over_power_zone_when_both_set():
+    payload = build_strength_payload(
+        session([ExerciseStep(
+            exercise="Run", duration_sec=1200,
+            target_heart_rate_zone=2, target_power_zone=3,
+        )], kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert step["zoneNumber"] == 2
+
+
+def test_pace_target_uses_value_pair_not_zone_number():
+    """Live-verified: pace.zone (workoutTargetTypeId 6) did NOT accept
+    zoneNumber in testing, unlike heart rate/power — only an explicit
+    targetValueOne/targetValueTwo pair."""
+    payload = build_strength_payload(
+        session([ExerciseStep(
+            exercise="400m repeat", distance_m=400,
+            target_pace_min_mps=4.0, target_pace_max_mps=4.5,
+        )], kind="running")
+    )
+    (step,) = payload["workoutSegments"][0]["workoutSteps"]
+    assert step["targetType"] == {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    assert step["targetValueOne"] == 4.0
+    assert step["targetValueTwo"] == 4.5
+    assert "zoneNumber" not in step
+
+
 def test_superset_only_merges_consecutive_same_group_steps():
     """A repeated group id that ISN'T consecutive (group 1, group 2, group 1)
     is two separate supersets, not one merged group — reordering exercises
