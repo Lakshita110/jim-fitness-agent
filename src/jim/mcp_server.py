@@ -231,6 +231,38 @@ def get_saved_workout(workout_id: str) -> dict:
     return get_garmin_workout_detail(_current_user_id(), workout_id)
 
 
+# --- TEMP: probing the real lap-button/rest end condition, remove after use --
+
+
+@mcp.tool
+def _debug_probe_rest_condition(for_date: str, condition_id: int) -> dict:
+    """TEMPORARY. Create a minimal stepTypeId=5 ("rest") step with a raw
+    endCondition id so the response can be read back to find Garmin's real
+    self-paced (press-to-continue / "lap.button") condition id — no official
+    docs exist for this, only conflicting reverse-engineered guesses."""
+    from jim.tools.garmin import client
+
+    api = client(_current_user_id())
+    payload = {
+        "workoutName": f"REST PROBE {condition_id}",
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
+                "endCondition": {"conditionTypeId": condition_id, "conditionTypeKey": "probe"},
+                "endConditionValue": None,
+                "description": "probe rest",
+            }],
+        }],
+    }
+    resp = api.upload_workout(payload)
+    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp.get("workoutSegments")}
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
