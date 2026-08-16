@@ -234,54 +234,30 @@ def get_saved_workout(workout_id: str) -> dict:
     return get_garmin_workout_detail(_current_user_id(), workout_id)
 
 
-# --- TEMP: probing step types / distance conditions / target zones, remove after use --
+# --- TEMP: confirming zoneNumber works for power/pace zones too, remove after --
 
 
 @mcp.tool
-def _debug_probe_step(
-    step_type_id: int | None = None,
-    condition_id: int | None = None,
-    condition_value: float | None = None,
-    target_type_id: int | None = None,
-    target_value_one: float | None = None,
-    target_value_two: float | None = None,
-    zone_number: int | None = None,
-) -> dict:
-    """TEMPORARY. Build one raw step with whatever combination of fields is
-    passed, upload it, and echo back exactly what Garmin stored — no official
-    docs exist for stepType/endCondition/targetType ids beyond what's already
-    live-verified (interval=3, rest=5, repeat=6, time=2, reps=10,
-    iterations=7, lap.button=1), so every other id has to be found this way."""
+def _debug_probe_zone(target_type_id: int, zone_number: int) -> dict:
+    """TEMPORARY."""
     from jim.tools.garmin import client
 
-    step: dict = {
-        "type": "ExecutableStepDTO",
-        "stepOrder": 1,
-        "stepType": {"stepTypeId": step_type_id or 3, "stepTypeKey": "probe"},
-        "description": "probe",
-    }
-    if condition_id is not None:
-        step["endCondition"] = {"conditionTypeId": condition_id, "conditionTypeKey": "probe"}
-        step["endConditionValue"] = condition_value
-    else:
-        step["endCondition"] = {"conditionTypeId": 2, "conditionTypeKey": "time"}
-        step["endConditionValue"] = 30
-    if target_type_id is not None:
-        step["targetType"] = {"workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": "probe"}
-        if target_value_one is not None:
-            step["targetValueOne"] = target_value_one
-        if target_value_two is not None:
-            step["targetValueTwo"] = target_value_two
-        if zone_number is not None:
-            step["zoneNumber"] = zone_number
-
     payload = {
-        "workoutName": "STEP PROBE",
+        "workoutName": "ZONE PROBE",
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [{
             "segmentOrder": 1,
             "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
-            "workoutSteps": [step],
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 30,
+                "description": "probe",
+                "targetType": {"workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": "probe"},
+                "zoneNumber": zone_number,
+            }],
         }],
     }
     api = client(_current_user_id())
