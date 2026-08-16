@@ -254,6 +254,24 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
+# --- TEMP: general-purpose raw payload probe, remove after use --
+
+
+@mcp.tool
+def _debug_probe_raw(payload_json: str) -> dict:
+    """TEMPORARY. Upload a completely raw workout payload (as a JSON string)
+    and echo back exactly what Garmin stored — for exploring fields with no
+    documentation anywhere (official or reverse-engineered) without a
+    redeploy per field."""
+    import json as _json
+
+    from jim.tools.garmin import client
+
+    api = client(_current_user_id())
+    resp = api.upload_workout(_json.loads(payload_json))
+    return {"workout_id": str(resp.get("workoutId", "")), "raw": resp}
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
