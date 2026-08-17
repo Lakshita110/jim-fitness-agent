@@ -274,6 +274,29 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
+# --- TEMP: checking raw Garmin recovery data, remove after use --
+
+
+@mcp.tool
+def _debug_raw_recovery(as_of: str | None = None) -> dict:
+    """TEMPORARY. Raw get_stats/get_sleep_data/get_hrv_data responses for a
+    day, to see whether missing body_battery/hrv/sleep is a real Garmin data
+    gap or a parsing bug on our side."""
+    from datetime import date as _date
+
+    from jim.tools.garmin import client
+
+    user_id = _current_user_id()
+    day = _date.fromisoformat(as_of) if as_of else _date.today()
+    api = client(user_id)
+    iso = day.isoformat()
+    return {
+        "stats": api.get_stats(iso),
+        "sleep": api.get_sleep_data(iso),
+        "hrv": api.get_hrv_data(iso),
+    }
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
