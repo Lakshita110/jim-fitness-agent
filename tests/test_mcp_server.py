@@ -135,3 +135,42 @@ def test_normalize_kind_maps_garmin_and_common_vocabulary():
 def test_normalize_kind_rejects_unknown_values_with_a_clear_message():
     with pytest.raises(ToolError, match="unrecognized kind"):
         mcp_server_mod._normalize_kind("interpretive dance")
+
+
+def test_ensure_history_resyncs_today_every_call(monkeypatch):
+    """The nightly cron runs once, early evening — before that night's
+    sleep/HRV/body-battery data even exists. Without a re-sync on read,
+    today's stored row stays stale (nulls) for the rest of the day. A live
+    read is the moment worth paying one extra Garmin call for."""
+    calls = []
+    from jim.jobs import nightly as nightly_mod
+
+    monkeypatch.setattr(nightly_mod, "_today_for_user", lambda uid: "2026-08-17")
+    monkeypatch.setattr(nightly_mod, "sync_today", lambda uid: calls.append(("sync_today", uid)))
+
+    from jim.tools import garmin as garmin_mod
+
+    monkeypatch.setattr(
+        garmin_mod, "backfill_if_empty",
+        lambda uid, today, days=90: calls.append(("backfill_if_empty", uid)),
+    )
+
+    mcp_server_mod._ensure_history(42)
+
+    assert ("backfill_if_empty", 42) in calls
+    assert ("sync_today", 42) in calls
+
+
+def test_ensure_history_swallows_failures(monkeypatch):
+    """A Garmin hiccup during the opportunistic re-sync must not block the
+    read the athlete actually asked for."""
+    from jim.jobs import nightly as nightly_mod
+
+    monkeypatch.setattr(nightly_mod, "_today_for_user", lambda uid: "2026-08-17")
+
+    def boom(uid):
+        raise RuntimeError("garmin down")
+
+    monkeypatch.setattr(nightly_mod, "sync_today", boom)
+
+    mcp_server_mod._ensure_history(42)  # must not raise

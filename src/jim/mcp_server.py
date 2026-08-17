@@ -115,12 +115,23 @@ def _ensure_history(user_id: int) -> None:
     same 90-day pull the nightly cron would eventually do on its own — see
     tools.garmin.backfill_if_empty. Called from the read tools rather than
     _current_user_id() itself so a write-only call (e.g. set_constraints)
-    doesn't pay for it; every read tool needs the history anyway."""
-    from jim.jobs.nightly import _today_for_user
+    doesn't pay for it; every read tool needs the history anyway.
+
+    Also re-syncs *today's* row on every call (sync_today, a single cheap
+    Garmin round trip) — not just when history is empty. The nightly cron
+    runs once, early evening, which is BEFORE that night's sleep/HRV/body-
+    battery data even exists yet; today's stored row is structurally stale
+    until something re-fetches it later in the day or the following
+    morning, and nothing did until now. A live chat read is exactly the
+    moment worth paying that one extra call for — the athlete is asking
+    right now, not waiting for tonight's cron."""
+    from jim.jobs.nightly import _today_for_user, sync_today
     from jim.tools.garmin import backfill_if_empty
 
     try:
-        backfill_if_empty(user_id, _today_for_user(user_id))
+        today = _today_for_user(user_id)
+        backfill_if_empty(user_id, today)
+        sync_today(user_id)
     except Exception:
         # Best-effort — a Garmin hiccup here must not block the read the
         # athlete actually asked for.
@@ -272,29 +283,6 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
-
-
-# --- TEMP: checking raw Garmin recovery data, remove after use --
-
-
-@mcp.tool
-def _debug_raw_recovery(as_of: str | None = None) -> dict:
-    """TEMPORARY. Raw get_stats/get_sleep_data/get_hrv_data responses for a
-    day, to see whether missing body_battery/hrv/sleep is a real Garmin data
-    gap or a parsing bug on our side."""
-    from datetime import date as _date
-
-    from jim.tools.garmin import client
-
-    user_id = _current_user_id()
-    day = _date.fromisoformat(as_of) if as_of else _date.today()
-    api = client(user_id)
-    iso = day.isoformat()
-    return {
-        "stats": api.get_stats(iso),
-        "sleep": api.get_sleep_data(iso),
-        "hrv": api.get_hrv_data(iso),
-    }
 
 
 # --- write: create/schedule/unschedule ---------------------------------------
