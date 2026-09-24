@@ -990,10 +990,11 @@ def update_garmin_workout(user_id: int, workout_id: str, session: StructuredSess
     Connect's own website does when you edit a saved workout: PUT the full
     workout JSON, with `workoutId` included in the body, to that same
     per-id path. NOT in any official or reverse-engineered docs found; only
-    reachable because the client happens to expose the verb. Needs live
-    verification before being trusted as reliable — see mcp_server.py's
-    update_workout tool docstring for the fallback if this ever 400s/404s
-    on a real account."""
+    reachable because the client happens to expose the verb. Live-verified
+    against a real account: same workoutId afterward, name/description/steps
+    all replaced, updatedDate bumped, no duplicate left in the library. See
+    mcp_server.py's update_workout docstring for the fallback if Garmin ever
+    changes this."""
     from jim.tools.exercise_match import semantic_resolver
 
     api = client(user_id)
