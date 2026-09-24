@@ -462,6 +462,37 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
+# --- TEMP: raw calendar probe, remove after use --
+
+
+@mcp.tool
+def _debug_calendar_raw(year: int, month: int, repeats: int = 3) -> list:
+    """TEMPORARY."""
+    import garminconnect
+
+    from jim.tools.garmin import client
+
+    api = client(_current_user_id())
+    out = []
+    for _ in range(repeats):
+        try:
+            raw = api.get_scheduled_workouts(year, month)
+            items = (raw or {}).get("calendarItems", []) if isinstance(raw, dict) else raw
+            out.append({
+                "type": type(raw).__name__,
+                "keys": sorted(raw)[:12] if isinstance(raw, dict) else None,
+                "n_items": len(items or []),
+                "workouts": sorted(
+                    f"{i.get('date')} {i.get('workoutId')} {i.get('title')}"
+                    for i in (items or []) if i.get("itemType") == "workout"
+                ),
+                "lib": garminconnect.__version__ if hasattr(garminconnect, "__version__") else "?",
+            })
+        except Exception as e:  # noqa: BLE001
+            out.append({"error": f"{type(e).__name__}: {e}"})
+    return out
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
