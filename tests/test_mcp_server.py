@@ -97,7 +97,7 @@ async def test_mcp_auth_and_multi_user_isolation(monkeypatch):
         token_c = auth.create_session_token(303)
         async with _asgi_client({"Authorization": f"Bearer {token_c}"}) as c:
             write_result = await c.call_tool("set_constraints", {"content": "no jump squats"})
-        assert write_result.data == {"ok": True}
+        assert write_result.data == {"ok": True, "length": len("no jump squats")}
         assert writes == [(303, "no jump squats")]
 
 

@@ -1,11 +1,20 @@
-"""Jim's Garmin MCP — the replacement for coach.py's own conversation engine.
+"""Jim's Garmin MCP server — Claude is the coach; this gives it hands.
 
-Claude is now the reasoning engine; this server just gives it hands: read
-Garmin history/readiness/calendar/workout library, write (create/schedule/
-unschedule) workouts, and read/edit the one remaining piece of Jim-side
-state — a per-athlete constraints doc (knee/ankle limits, standing rules,
-goals) that replaced the old playbook's template library. Named/reusable
-workouts now live in Garmin's own library, not a separate YAML store.
+Tools, by group:
+- read: get_readiness, get_exercise_history, get_recent_activities,
+  get_scheduled_workouts, list_saved_workouts, get_saved_workout
+- write: create_or_update_workout (one-off, dated, auto-scheduled),
+  save_to_library (permanent), update_workout (in place, by id),
+  schedule_workout, unschedule_day, delete_workout
+- maintenance: backfill_history, cleanup_old_adapted_workouts
+- memory: get_constraints / set_constraints — the one piece of Jim-side
+  state (knee/ankle limits, standing rules, goals). Named/reusable
+  workouts live in Garmin's own library, not here.
+
+Every tool validates its inputs up front and turns bad input or a Garmin
+failure into a ToolError with a message saying what to do next — see
+`_garmin` and the `_parse_*` helpers — rather than letting a raw Python or
+HTTP exception reach the model.
 
 Auth: no cookie jar here (this isn't a browser), so every tool call resolves
 its caller from the same signed token `auth.py` already issues from
@@ -23,8 +32,11 @@ about identity is ever cached across calls. See tests/test_mcp_server.py
 for the isolation check this depends on.
 """
 
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -71,7 +83,126 @@ def _normalize_kind(kind: str) -> SessionKind:
         )
     return normalized
 
+
+log = logging.getLogger(__name__)
+
 mcp = FastMCP("jim-garmin")
+
+
+# --- input validation / error translation ------------------------------------
+
+
+def _parse_date(value: str, field: str) -> date:
+    try:
+        return date.fromisoformat(value.strip())
+    except (ValueError, AttributeError) as e:
+        raise ToolError(f"{field} must be an ISO date like 2026-09-24, got {value!r}") from e
+
+
+def _parse_workout_id(value: str | int) -> str:
+    text = str(value).strip()
+    if not text.isdigit() or int(text) <= 0:
+        raise ToolError(
+            f"workout_id must be Garmin's numeric id (from list_saved_workouts or"
+            f" get_scheduled_workouts), got {value!r}"
+        )
+    return text
+
+
+def _bounded(value: int, field: str, lo: int, hi: int) -> int:
+    if not lo <= value <= hi:
+        raise ToolError(f"{field} must be between {lo} and {hi}, got {value}")
+    return value
+
+
+def _user_today(user_id: int) -> date:
+    """'Today' in the athlete's own timezone — not the server's UTC date,
+    which is already tomorrow for a US athlete by late evening."""
+    from jim.jobs.nightly import _today_for_user
+
+    return _today_for_user(user_id)
+
+
+@contextmanager
+def _garmin(user_id: int, action: str) -> Iterator[None]:
+    """Turn any Garmin-side failure into a ToolError that says what to do.
+
+    An auth failure also evicts the cached client, so the next call logs in
+    fresh instead of reusing a dead session for the rest of the process."""
+    from garminconnect import (
+        GarminConnectAuthenticationError,
+        GarminConnectConnectionError,
+        GarminConnectTooManyRequestsError,
+    )
+
+    from jim.tools import garmin as garmin_tools
+
+    try:
+        yield
+    except ToolError:
+        raise
+    except GarminConnectAuthenticationError as e:
+        garmin_tools._clients.pop(user_id, None)
+        raise ToolError(
+            f"couldn't {action}: Garmin rejected the stored login — reconnect Garmin"
+            " in Jim's settings, then retry"
+        ) from e
+    except GarminConnectTooManyRequestsError as e:
+        raise ToolError(
+            f"couldn't {action}: Garmin is rate-limiting requests — wait a few minutes"
+        ) from e
+    except GarminConnectConnectionError as e:
+        raise ToolError(f"couldn't {action}: Garmin returned an error ({e})") from e
+    except RuntimeError as e:
+        # tools.garmin.client() raises RuntimeError with an already-readable
+        # message (not connected, bad token blob, login failed).
+        garmin_tools._clients.pop(user_id, None)
+        raise ToolError(f"couldn't {action}: {e}") from e
+    except Exception as e:
+        log.exception("garmin call failed: %s (user %s)", action, user_id)
+        raise ToolError(f"couldn't {action}: {type(e).__name__}: {e}") from e
+
+
+def _best_effort(user_id: int, action: str, fn: Any, *args: Any) -> Any:
+    """For optional extras inside a read (Garmin's own readiness, step
+    counts): a failure there shouldn't sink the whole response. Returns a
+    small {"unavailable": reason} marker instead so the model knows the
+    field is missing rather than genuinely empty."""
+    try:
+        return fn(user_id, *args)
+    except Exception as e:  # noqa: BLE001
+        log.warning("optional garmin read failed: %s (user %s): %s", action, user_id, e)
+        return {"unavailable": f"{type(e).__name__}: {e}"}
+
+
+def _to_steps(steps: list["StepIn"], kind: str) -> list[ExerciseStep]:
+    if not steps and kind != "rest":
+        raise ToolError("steps is empty — a workout needs at least one step")
+    out = []
+    for i, s in enumerate(steps, 1):
+        if not s.exercise.strip():
+            raise ToolError(f"step {i}: exercise name is empty")
+        if s.sets < 1:
+            raise ToolError(f"step {i} ({s.exercise}): sets must be at least 1")
+        if s.pyramid_group is not None and not s.pyramid_rounds:
+            raise ToolError(
+                f"step {i} ({s.exercise}): pyramid_group is set but pyramid_rounds isn't"
+                " — say how many outer rounds the block repeats"
+            )
+        for field in ("reps", "duration_sec", "end_at_heart_rate_bpm"):
+            value = getattr(s, field)
+            if value is not None and value <= 0:
+                raise ToolError(f"step {i} ({s.exercise}): {field} must be positive")
+        if s.distance_m is not None and s.distance_m <= 0:
+            raise ToolError(f"step {i} ({s.exercise}): distance_m must be positive")
+        if s.weight_kg is not None and s.weight_kg < 0:
+            raise ToolError(f"step {i} ({s.exercise}): weight_kg can't be negative")
+        for field in ("target_heart_rate_zone", "target_power_zone"):
+            zone = getattr(s, field)
+            if zone is not None and not 1 <= zone <= 10:
+                raise ToolError(f"step {i} ({s.exercise}): {field} must be 1-10, got {zone}")
+        out.append(ExerciseStep(**s.model_dump()))
+    return out
 
 
 def _token_from_request() -> str:
@@ -206,25 +337,38 @@ def get_readiness(as_of: str | None = None) -> dict:
     unproductive, ...) — a second opinion alongside Jim's own ACWR-based
     verdict above them. Either can come back empty/null if Garmin hasn't
     computed it for this athlete's watch/history yet; that's real, not a
-    bug, and just means less to go on from that source today."""
+    bug, and just means less to go on from that source today. If Garmin
+    itself errors on either, that field comes back as {"unavailable": ...}
+    instead of failing the whole read.
+
+    `as_of` defaults to today in the athlete's own timezone."""
     from jim.tools.garmin import get_training_readiness, get_training_status
     from jim.tools.history import readiness_read
 
     user_id = _current_user_id()
     _ensure_history(user_id)
-    day = date.fromisoformat(as_of) if as_of else date.today()
+    day = _parse_date(as_of, "as_of") if as_of else _user_today(user_id)
     result = readiness_read(user_id, day).model_dump(mode="json")
-    result["training_readiness"] = get_training_readiness(user_id, day)
-    result["training_status"] = get_training_status(user_id, day)
+    result["training_readiness"] = _best_effort(
+        user_id, "training readiness", get_training_readiness, day,
+    )
+    result["training_status"] = _best_effort(
+        user_id, "training status", get_training_status, day,
+    )
     return result
 
 
 @mcp.tool
 def get_exercise_history(exercise: str, days: int = 180) -> str:
-    """How the athlete actually performed a movement recently (sets/reps/kg
-    per session) — fuzzy-matched against logged Garmin sets."""
+    """How the athlete actually performed a movement over the last `days`
+    (1-730): sets/reps/kg per session, newest first. Fuzzy-matched against
+    logged Garmin sets — "goblet squat" finds GOBLET_SQUAT. Check this
+    before prescribing a load for a movement."""
     from jim.tools.history import exercise_history
 
+    if not exercise.strip():
+        raise ToolError("exercise is empty — name the movement to look up")
+    days = _bounded(days, "days", 1, 730)
     user_id = _current_user_id()
     _ensure_history(user_id)
     return exercise_history(user_id, exercise, days=days)
@@ -232,21 +376,28 @@ def get_exercise_history(exercise: str, days: int = 180) -> str:
 
 @mcp.tool
 def get_recent_activities(days: int = 14) -> str:
-    """Recent Garmin activities (type, duration) for the trailing window,
-    plus a daily step count line per day — general daily activity context,
-    not structured training."""
+    """Recent Garmin activities (type, duration) over the last `days`
+    (1-90), plan adherence where recorded, plus a daily step-count line per
+    day — general daily-activity context, not structured training. If the
+    step fetch fails, the activity list still comes back with a note."""
     from jim.tools.garmin import get_daily_steps
     from jim.tools.history import workout_history
 
+    days = _bounded(days, "days", 1, 90)
     user_id = _current_user_id()
     _ensure_history(user_id)
     text = workout_history(user_id, days=days)
 
-    today = date.today()
-    steps = get_daily_steps(user_id, today - timedelta(days=days), today)
-    if steps:
+    today = _user_today(user_id)
+    steps = _best_effort(
+        user_id, "daily steps", get_daily_steps, today - timedelta(days=days), today,
+    )
+    if isinstance(steps, dict):
+        text = f"{text}\n\nDaily steps: unavailable ({steps['unavailable']})"
+    elif steps:
         step_lines = "\n".join(
-            f"{s['calendarDate']}: {s['totalSteps']} steps (goal {s['stepGoal']})"
+            f"{s.get('calendarDate')}: {s.get('totalSteps')} steps"
+            f" (goal {s.get('stepGoal')})"
             for s in steps
         )
         text = f"{text}\n\nDaily steps:\n{step_lines}"
@@ -255,33 +406,59 @@ def get_recent_activities(days: int = 14) -> str:
 
 @mcp.tool
 def get_scheduled_workouts(start: str, end: str) -> list[dict]:
-    """Workouts already on the Garmin calendar between `start` and `end`
-    (ISO dates, inclusive) — what's actually scheduled, not what Jim thinks
-    it pushed."""
+    """Workouts actually on the Garmin calendar between `start` and `end`
+    (ISO dates, inclusive, at most 92 days apart) — what's really
+    scheduled, not what Jim thinks it pushed. Completed sessions drop off
+    Garmin's calendar, so this shows planned-not-yet-done items."""
     from jim.tools.garmin import get_scheduled_workouts as _get
 
+    start_d, end_d = _parse_date(start, "start"), _parse_date(end, "end")
+    if end_d < start_d:
+        raise ToolError(f"end ({end}) is before start ({start})")
+    if (end_d - start_d).days > 92:
+        raise ToolError("range is over 92 days — split it into smaller windows")
     user_id = _current_user_id()
-    rows = _get(user_id, date.fromisoformat(start), date.fromisoformat(end))
+    with _garmin(user_id, "read the Garmin calendar"):
+        rows = _get(user_id, start_d, end_d)
     return [{**r, "date": r["date"].isoformat()} for r in rows]
 
 
 @mcp.tool
 def list_saved_workouts() -> list[dict]:
-    """The athlete's personal Garmin workout library — named, reusable
-    workouts (create/edit them with `create_or_update_workout`)."""
+    """The athlete's Garmin workout library: workout_id, name, sport. Names
+    starting "Jim · " are one-off sessions from create_or_update_workout
+    (swept after their date); everything else is a permanent workout.
+    Build new ones with save_to_library, edit with update_workout."""
     from jim.tools.garmin import list_garmin_workouts
 
-    return list_garmin_workouts(_current_user_id())
+    user_id = _current_user_id()
+    with _garmin(user_id, "list saved workouts"):
+        return list_garmin_workouts(user_id)
+
+
+def _prune(value: Any) -> Any:
+    """Drop null/empty fields from Garmin's workout JSON — most of each step
+    is nulls, which is noise for the model to read through."""
+    if isinstance(value, dict):
+        pruned = {k: _prune(v) for k, v in value.items()}
+        return {k: v for k, v in pruned.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_prune(v) for v in value]
+    return value
 
 
 @mcp.tool
 def get_saved_workout(workout_id: str) -> dict:
-    """Full step-by-step detail for one saved Garmin workout."""
+    """Full step-by-step detail for one Garmin workout (null fields
+    stripped): name, sport, description, and every step with its end
+    condition, targets, and nested repeat groups. Read this before
+    update_workout so you can resend the full workout with just your change."""
     from jim.tools.garmin import get_garmin_workout_detail
 
-    return get_garmin_workout_detail(_current_user_id(), workout_id)
-
-
+    wid = _parse_workout_id(workout_id)
+    user_id = _current_user_id()
+    with _garmin(user_id, f"read workout {wid}"):
+        return _prune(get_garmin_workout_detail(user_id, wid))
 
 
 
@@ -379,21 +556,43 @@ def create_or_update_workout(
 
     The workout is created AND scheduled on `for_date` in one call — no
     separate `schedule_workout` needed; calling it again would put a second
-    copy on the calendar."""
-    from jim.tools.garmin import create_garmin_workout
+    copy on the calendar. If the scheduling half fails, the just-created
+    workout is deleted again so no unscheduled orphan is left behind, and
+    the error says so."""
+    from jim.tools.garmin import create_garmin_workout, delete_garmin_workout
     from jim.tools.garmin import schedule_workout as schedule_garmin_workout
 
+    day = _parse_date(for_date, "for_date")
+    normalized_kind = _normalize_kind(kind)
     user_id = _current_user_id()
+    title = title.strip()
+    if title.startswith(ADAPTED_WORKOUT_PREFIX):
+        title = title[len(ADAPTED_WORKOUT_PREFIX):]
+    if not title:
+        raise ToolError("title is empty")
     session = StructuredSession(
-        for_date=date.fromisoformat(for_date),
-        kind=_normalize_kind(kind),
+        for_date=day,
+        kind=normalized_kind,
         title=f"{ADAPTED_WORKOUT_PREFIX}{title}",
-        steps=[ExerciseStep(**s.model_dump()) for s in steps],
+        steps=_to_steps(steps, normalized_kind),
         rationale_summary=notes,
     )
-    ref = create_garmin_workout(user_id, session)
-    schedule_garmin_workout(user_id, ref.workout_id, session.for_date)
-    return {**ref.model_dump(mode="json"), "scheduled_for": for_date}
+    with _garmin(user_id, "create the workout"):
+        ref = create_garmin_workout(user_id, session)
+    try:
+        with _garmin(user_id, f"schedule workout {ref.workout_id} on {day}"):
+            schedule_garmin_workout(user_id, ref.workout_id, day)
+    except ToolError as e:
+        try:
+            delete_garmin_workout(user_id, ref.workout_id)
+            cleanup = "the unscheduled workout was deleted again, so nothing changed"
+        except Exception:  # noqa: BLE001
+            cleanup = (
+                f"workout {ref.workout_id} was created but is NOT on the calendar —"
+                " retry schedule_workout with that id, or delete_workout it"
+            )
+        raise ToolError(f"{e}; {cleanup}") from e
+    return {**ref.model_dump(mode="json"), "title": session.title, "scheduled_for": day.isoformat()}
 
 
 @mcp.tool
@@ -417,19 +616,30 @@ def save_to_library(title: str, kind: str, steps: list[StepIn], notes: str = "")
 
     Same `kind`/step rules as create_or_update_workout (see its docstring
     for the full list, the strength/mobility-only exercise matching, and
-    what `notes` does)."""
+    what `notes` does). The title can't start with "Jim · " — that prefix
+    marks a workout for automatic cleanup, the opposite of permanent."""
     from jim.tools.garmin import create_garmin_workout
 
+    title = title.strip()
+    if not title:
+        raise ToolError("title is empty")
+    if title.startswith(ADAPTED_WORKOUT_PREFIX):
+        raise ToolError(
+            f"a permanent workout can't be titled {ADAPTED_WORKOUT_PREFIX!r}... — that"
+            " prefix marks one-offs for automatic deletion; drop it"
+        )
+    normalized_kind = _normalize_kind(kind)
     user_id = _current_user_id()
     session = StructuredSession(
-        for_date=date.today(),
-        kind=_normalize_kind(kind),
+        for_date=_user_today(user_id),
+        kind=normalized_kind,
         title=title,
-        steps=[ExerciseStep(**s.model_dump()) for s in steps],
+        steps=_to_steps(steps, normalized_kind),
         rationale_summary=notes,
     )
-    ref = create_garmin_workout(user_id, session)
-    return ref.model_dump(mode="json")
+    with _garmin(user_id, "save the workout to the library"):
+        ref = create_garmin_workout(user_id, session)
+    return {**ref.model_dump(mode="json"), "title": title}
 
 
 @mcp.tool
@@ -441,11 +651,11 @@ def update_workout(
     works for anything with a workout_id: a permanent library entry from
     `save_to_library`, or a one-off from `create_or_update_workout`.
 
-    Reaches Garmin's undocumented per-id update endpoint (a PUT that mirrors
-    what Garmin Connect's own website does when you edit a saved workout —
-    no official or reverse-engineered docs describe this, found only by
-    noticing the underlying HTTP client exposes the verb). If this ever
-    errors on a real account, fall back to the older pattern instead: call
+    Uses Garmin's per-id update endpoint (a PUT, the same thing Garmin
+    Connect's website does when you edit a saved workout). Undocumented,
+    but live-verified: same workout_id afterward, everything replaced, no
+    duplicate left behind. Scheduled days keep pointing at it, so there's
+    nothing to reschedule. If this ever errors, fall back to: call
     `save_to_library`/`create_or_update_workout` again with the corrected
     steps (a new workout_id comes back), repoint any scheduled days at the
     new id via `schedule_workout`, then `delete_workout` the old id once
@@ -462,51 +672,79 @@ def update_workout(
     renaming it.
 
     Only call this on an explicit ask to change something that already
-    exists — never silently, same as any other write."""
+    exists — never silently, same as any other write. Read the current
+    version with get_saved_workout first so nothing you didn't mean to
+    change gets dropped."""
     from jim.tools.garmin import update_garmin_workout
 
+    wid = _parse_workout_id(workout_id)
+    title = title.strip()
+    if not title:
+        raise ToolError("title is empty — resend the workout's current title to keep it")
+    normalized_kind = _normalize_kind(kind)
     user_id = _current_user_id()
     session = StructuredSession(
-        for_date=date.today(),
-        kind=_normalize_kind(kind),
+        for_date=_user_today(user_id),
+        kind=normalized_kind,
         title=title,
-        steps=[ExerciseStep(**s.model_dump()) for s in steps],
+        steps=_to_steps(steps, normalized_kind),
         rationale_summary=notes,
     )
-    ref = update_garmin_workout(user_id, workout_id, session)
-    return ref.model_dump(mode="json")
+    with _garmin(user_id, f"update workout {wid}"):
+        ref = update_garmin_workout(user_id, wid, session)
+    return {**ref.model_dump(mode="json"), "title": title}
 
 
 @mcp.tool
 def schedule_workout(workout_id: str, on: str) -> dict:
-    """Schedule an existing Garmin workout (by id) onto the calendar for
-    `on` (ISO date). Only ever call this on an explicit ask to push/schedule
-    — never as a side effect of just discussing a plan."""
+    """Put an existing Garmin workout (by id) on the calendar for `on` (ISO
+    date). Use for library workouts (Full Body A, PT Day, ...) — one-offs
+    from create_or_update_workout are already scheduled, and scheduling one
+    again adds a second copy. Scheduling doesn't replace anything already on
+    that day; unschedule_day first if the day should only have this one.
+    Only call on an explicit ask to push/schedule, never as a side effect of
+    discussing a plan."""
     from jim.tools.garmin import schedule_workout as _schedule
 
-    _schedule(_current_user_id(), workout_id, date.fromisoformat(on))
-    return {"ok": True}
+    wid = _parse_workout_id(workout_id)
+    day = _parse_date(on, "on")
+    user_id = _current_user_id()
+    with _garmin(user_id, f"schedule workout {wid} on {day}"):
+        _schedule(user_id, wid, day)
+    return {"ok": True, "workout_id": wid, "scheduled_for": day.isoformat()}
 
 
 @mcp.tool
-def unschedule_day(on: str) -> dict:
-    """Clear whatever's scheduled (not completed) on `on` (ISO date) —
-    used before re-pushing a replacement so the day doesn't end up with two
-    workouts."""
+def unschedule_day(on: str, workout_id: str | None = None) -> dict:
+    """Remove planned (not completed) workouts from the calendar on `on`
+    (ISO date) — all of them, or only the one matching `workout_id`. The
+    workouts stay in the library; only the calendar entry goes. Returns
+    what was removed (an empty list means nothing matched). Use before
+    putting a replacement on a day so it doesn't end up with two."""
     from jim.tools.garmin import clear_schedule
 
-    clear_schedule(_current_user_id(), date.fromisoformat(on))
-    return {"ok": True}
+    day = _parse_date(on, "on")
+    wid = _parse_workout_id(workout_id) if workout_id is not None else None
+    user_id = _current_user_id()
+    with _garmin(user_id, f"clear the calendar on {day}"):
+        removed = clear_schedule(user_id, day, wid)
+    return {"ok": True, "date": day.isoformat(), "removed": removed}
 
 
 @mcp.tool
 def delete_workout(workout_id: str) -> dict:
-    """Delete a Garmin workout outright (not just unschedule it) — for a
-    one-off adaptation that's no longer wanted."""
+    """Permanently delete a Garmin workout from the library (and with it any
+    calendar entries). Can't be undone. For a one-off that's no longer
+    wanted this is routine; for a permanent library workout (no "Jim · "
+    prefix) only do it on an explicit ask to delete that specific workout —
+    to take it off one day instead, use unschedule_day."""
     from jim.tools.garmin import delete_garmin_workout
 
-    delete_garmin_workout(_current_user_id(), workout_id)
-    return {"ok": True}
+    wid = _parse_workout_id(workout_id)
+    user_id = _current_user_id()
+    with _garmin(user_id, f"delete workout {wid}"):
+        delete_garmin_workout(user_id, wid)
+    return {"ok": True, "deleted": wid}
 
 
 @mcp.tool
@@ -518,29 +756,39 @@ def backfill_history(days: int = 90) -> dict:
     account that connected Garmin before that existed (or only ever synced
     a few days) won't get topped up automatically. Call this on an explicit
     ask like "backfill my history" or "pull in my past workouts." Runs
-    synchronously and does ~90 sequential Garmin calls, so it can take a
-    couple of minutes — say so before calling it."""
-    from jim.jobs.nightly import _today_for_user
+    synchronously and makes one Garmin round trip per day (0-120 days;
+    0 re-syncs just today), so ~90 days takes a couple of minutes — say so
+    before calling it. Safe to repeat: existing rows are updated, not
+    duplicated."""
     from jim.tools.garmin import backfill_history as _backfill
 
+    days = _bounded(days, "days", 0, 120)
     user_id = _current_user_id()
-    _backfill(user_id, _today_for_user(user_id), days)
-    return {"ok": True}
+    with _garmin(user_id, "backfill history"):
+        _backfill(user_id, _user_today(user_id), days)
+    return {"ok": True, "days": days}
 
 
 @mcp.tool
 def cleanup_old_adapted_workouts(lookback_days: int = 30) -> dict:
     """Delete past one-off workouts this server created (titled "Jim · ...")
-    so they don't accumulate in the athlete's Garmin library/watch app. Runs
-    automatically every night, but call this directly if asked to "clean up"
-    or "tidy up" now rather than waiting for the nightly run. Only touches
-    workouts on or before yesterday; today's and future scheduled days are
-    never swept."""
-    from jim.jobs.nightly import _today_for_user, cleanup_adapted_workouts
+    so they don't pile up in the athlete's Garmin library and watch. Runs
+    automatically every night; call it directly if asked to "clean up" now.
+    Only touches one-offs created between `lookback_days` (1-365) ago and
+    yesterday — today's are never swept, and permanent library workouts
+    (no prefix) never are. Returns how many one-offs remain afterward."""
+    from jim.jobs.nightly import cleanup_adapted_workouts
+    from jim.tools.garmin import list_garmin_workouts
 
+    lookback_days = _bounded(lookback_days, "lookback_days", 1, 365)
     user_id = _current_user_id()
-    cleanup_adapted_workouts(user_id, _today_for_user(user_id), lookback_days)
-    return {"ok": True}
+    with _garmin(user_id, "clean up old one-off workouts"):
+        cleanup_adapted_workouts(user_id, _user_today(user_id), lookback_days)
+        remaining = [
+            w["name"] for w in list_garmin_workouts(user_id)
+            if w["name"].startswith(ADAPTED_WORKOUT_PREFIX)
+        ]
+    return {"ok": True, "one_offs_remaining": remaining}
 
 
 # --- constraints: the one remaining piece of Jim-side memory -----------------
@@ -548,18 +796,31 @@ def cleanup_old_adapted_workouts(lookback_days: int = 30) -> dict:
 
 @mcp.tool
 def get_constraints() -> str:
-    """The athlete's standing knee/ankle limits, safety rules, and goals.
-    Read this before proposing any session — it's the safety authority now
-    that there's no code-enforced guardrail."""
+    """The athlete's standing limits (injuries, knee/ankle/wrist rules),
+    safety rules, and goals, as free text. Read this before proposing any
+    session — it's the safety authority now that there's no code-enforced
+    guardrail. An empty string means nothing's recorded yet, not that there
+    are no limits — ask."""
     return db.get_constraints(_current_user_id())
 
 
 @mcp.tool
-def set_constraints(content: str) -> dict:
-    """Rewrite the athlete's constraints doc (whole-document replace, not a
-    merge) — call this when they state a new limit, rule, or long-term goal."""
-    db.set_constraints(_current_user_id(), content)
-    return {"ok": True}
+def set_constraints(content: str, allow_empty: bool = False) -> dict:
+    """REPLACE the athlete's whole constraints doc with `content` — not a
+    merge. Always get_constraints first and send back the existing text with
+    your change folded in, or everything else in it is lost. Call only when
+    the athlete states a new limit, rule, or goal (or asks to change one).
+    Sending empty content is refused unless `allow_empty=True`, which should
+    only be used on an explicit ask to wipe everything."""
+    if not content.strip() and not allow_empty:
+        raise ToolError(
+            "refusing to overwrite the constraints doc with empty text — that would"
+            " erase every recorded limit. Pass allow_empty=True only if the athlete"
+            " explicitly asked to clear it."
+        )
+    user_id = _current_user_id()
+    db.set_constraints(user_id, content)
+    return {"ok": True, "length": len(content)}
 
 
 def build_asgi_app():

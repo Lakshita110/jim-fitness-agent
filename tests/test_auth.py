@@ -160,7 +160,11 @@ def test_session_token_roundtrip(fake_db):
 
 def test_session_token_tampered_returns_none(fake_db):
     token = auth_mod.create_session_token(42)
-    tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+    # Flip the signature's FIRST character: the last base64 char carries
+    # padding bits, so changing it sometimes decodes to identical bytes and
+    # the "tampered" token still verified (~1 run in 16).
+    head, _, sig = token.rpartition(".")
+    tampered = f"{head}.{'A' if sig[0] != 'A' else 'B'}{sig[1:]}"
     assert auth_mod.verify_session_token(tampered) is None
 
 

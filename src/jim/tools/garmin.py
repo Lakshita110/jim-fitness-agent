@@ -1059,16 +1059,28 @@ def get_scheduled_workouts(user_id: int, start: date, end: date) -> list[dict]:
     return out
 
 
-def clear_schedule(user_id: int, on: date) -> None:
-    """Unschedule every planned (not completed) workout on `on`.
+def clear_schedule(
+    user_id: int, on: date, workout_id: str | None = None,
+) -> list[dict[str, str]]:
+    """Unschedule planned workouts on `on` — every one, or only those whose
+    workoutId matches `workout_id`. Returns what was removed.
 
-    Used by the morning re-plan before pushing a replacement, so a stale
-    nightly schedule doesn't sit next to the new one. Only touches calendar
-    items of type 'workout' — recorded activities are untouched."""
+    Only touches calendar items of type 'workout' — recorded activities are
+    untouched. Unscheduling removes the calendar entry only; the workout
+    itself stays in the library."""
     api = client(user_id)
     calendar = api.get_scheduled_workouts(on.year, on.month) or {}
+    removed: list[dict[str, str]] = []
     for item in calendar.get("calendarItems", []):
-        if item.get("itemType") == "workout" and item.get("date") == on.isoformat():
-            api.unschedule_workout(item["id"])
-            log.info("unscheduled stale workout %s (%s) on %s", item.get("id"),
-                     item.get("title"), on)
+        if item.get("itemType") != "workout" or item.get("date") != on.isoformat():
+            continue
+        if workout_id is not None and str(item.get("workoutId")) != workout_id:
+            continue
+        api.unschedule_workout(item["id"])
+        removed.append({
+            "workout_id": str(item.get("workoutId", "")),
+            "title": item.get("title") or "",
+        })
+        log.info("unscheduled workout %s (%s) on %s", item.get("workoutId"),
+                 item.get("title"), on)
+    return removed
