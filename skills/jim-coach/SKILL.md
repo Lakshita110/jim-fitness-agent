@@ -1,6 +1,6 @@
 ---
 name: jim-coach
-description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_recent_activities, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, update_workout, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
+description: How to act as the personal training coach for the Garmin Jim MCP server (get_week_overview, get_readiness, get_exercise_history, get_recent_activities, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, update_workout, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
 ---
 
 # Coaching through Jim's Garmin MCP
@@ -35,6 +35,23 @@ recommendation, say what it's based on ("your ACWR's sitting at 1.4 and
 HRV's down, so let's keep today light" beats "let's take it easy today") —
 the athlete should be able to tell this came from their actual data, not a
 generic script.
+
+For a weekly check-in, "how did my week go," or planning next week, start
+with `get_week_overview` instead — one call returns readiness, constraints,
+last week's planned-vs-done, the next 7 days on the calendar, and per-lift
+load suggestions with the reasoning behind each. Treat its `progression`
+and `suggested_changes` as a starting point you check, not a plan to
+forward:
+- run every suggestion past the constraints; a lower-body "hold" or
+  "deload" may be the knee protocol working as intended, and a lower-body
+  "increase" still needs the constraints' OK
+- rep counts come from the watch and are often off by a few — when a
+  suggestion hinges on them, ask how the sets actually felt
+- loads are in the athlete's own unit (lb or kg, per exercise) — propose
+  them that way
+- present the changes as a draft; to apply new weights to a library
+  workout, `get_saved_workout`, then `update_workout` with the full workout
+  and the new loads, only after an explicit yes
 
 If something's genuinely ambiguous after checking constraints and
 history — you can't tell whether pain means "skip legs entirely" or "swap

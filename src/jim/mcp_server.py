@@ -35,7 +35,7 @@ for the isolation check this depends on.
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -45,6 +45,7 @@ from pydantic import BaseModel
 
 from jim import auth, db
 from jim.schemas import ExerciseStep, SessionKind, StructuredSession
+from jim.tools import memory
 from jim.tools.garmin import ADAPTED_WORKOUT_PREFIX
 
 # Claude reasonably reaches for Garmin's own vocabulary (it just read it from
@@ -85,6 +86,8 @@ def _normalize_kind(kind: str) -> SessionKind:
 
 
 log = logging.getLogger(__name__)
+
+LIVE_SYNC_INTERVAL = timedelta(minutes=15)
 
 mcp = FastMCP("jim-garmin")
 
@@ -175,6 +178,25 @@ def _best_effort(user_id: int, action: str, fn: Any, *args: Any) -> Any:
         return {"unavailable": f"{type(e).__name__}: {e}"}
 
 
+def _remember(action: str, fn: Any, *args: Any, **kwargs: Any) -> None:
+    """Keep the plan-vs-actual record in step with a Garmin write that has
+    already succeeded. Failing here must not turn a completed write into an
+    error (the athlete's watch already has the change), so it's logged."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:  # noqa: BLE001
+        log.warning("couldn't record plan change (%s)", action, exc_info=True)
+
+
+def _record_scheduled(user_id: int, workout_id: str, day: date) -> None:
+    """schedule_workout only knows an id — read the workout back so the
+    stored plan has its kind, title and planned reps."""
+    from jim.tools.garmin import get_garmin_workout_detail, plan_from_garmin_detail
+
+    detail = get_garmin_workout_detail(user_id, workout_id)
+    memory.record_plan(user_id, workout_id, plan_from_garmin_detail(detail, day))
+
+
 def _to_steps(steps: list["StepIn"], kind: str) -> list[ExerciseStep]:
     if not steps and kind != "rest":
         raise ToolError("steps is empty — a workout needs at least one step")
@@ -255,14 +277,25 @@ def _ensure_history(user_id: int) -> None:
     until something re-fetches it later in the day or the following
     morning, and nothing did until now. A live chat read is exactly the
     moment worth paying that one extra call for — the athlete is asking
-    right now, not waiting for tonight's cron."""
+    right now, not waiting for tonight's cron.
+
+    Throttled to once per LIVE_SYNC_INTERVAL per user: one coaching turn
+    typically calls several read tools back to back, and re-fetching the same
+    day from Garmin for each was slow and courted rate limits."""
+    from datetime import datetime
+
     from jim.jobs.nightly import _today_for_user, sync_today
     from jim.tools.garmin import backfill_if_empty
 
     try:
+        last = db.kv_get(user_id, "live_sync_at")
+        now = datetime.now(UTC)
+        if last and now - datetime.fromisoformat(last) < LIVE_SYNC_INTERVAL:
+            return
         today = _today_for_user(user_id)
         backfill_if_empty(user_id, today)
         sync_today(user_id)
+        db.kv_set(user_id, "live_sync_at", now.isoformat())
     except Exception:
         # Best-effort — a Garmin hiccup here must not block the read the
         # athlete actually asked for, but it must not vanish either.
@@ -470,6 +503,166 @@ def get_saved_workout(workout_id: str) -> dict:
 
 
 
+def _garmin_exercise_key(name: str) -> str | None:
+    """The Garmin exerciseName a planned step maps to (the key logged sets
+    use), so planned reps can be matched to what was actually lifted."""
+    import re
+
+    from jim.tools.garmin import classify_garmin_exercise
+
+    if re.fullmatch(r"[A-Z0-9_]+", name):
+        return name
+    return classify_garmin_exercise(name)[1]
+
+
+@mcp.tool
+def get_week_overview() -> dict:
+    """One read for a weekly check-in or planning next week — everything a
+    coaching turn otherwise gathers with 4-5 calls, plus load suggestions:
+
+    - `readiness`: today's verdict (and a recovery_note if last night's
+      sleep/HRV hasn't synced yet)
+    - `constraints`: the athlete's limits — apply them to everything below
+    - `last_7_days`: recorded activities, and every planned session with
+      its status: done, did_something_else (moved, but not what was
+      planned), missed, or pending (today, nothing recorded yet)
+    - `next_7_days`: what's on the Garmin calendar
+    - `progression`: per exercise trained in the last 3 weeks, its recent
+      history and a suggested next load/reps — increase, add_reps, hold,
+      deload, add_time, or harder_variation — in the athlete's own unit
+      (lb or kg, detected from how they load it), with the reason
+    - `suggested_changes`: plain-language flags for next week (stalled
+      lifts, missed sessions, load trend, muscle groups gone quiet)
+
+    These are rule-based suggestions, not decisions. Before proposing any
+    of it: check each against `constraints` (especially knee/ankle-loaded
+    legs work — a "deload" or "hold" there may be deliberate), remember
+    rep counts come from the watch and are often off by a few, and show the
+    athlete a draft. Apply only on an explicit yes — update_workout for a
+    library workout's new weights, create_or_update_workout for a one-off.
+    When the week's load is high, increases are already turned into holds."""
+    from jim.jobs.reconcile import adhered
+    from jim.schemas import ActivitySummary
+    from jim.tools.garmin import KIND_BY_SPORT_KEY, list_garmin_workouts
+    from jim.tools.garmin import get_scheduled_workouts as calendar_between
+    from jim.tools.history import activities_between, exercise_sets_since, readiness_read
+    from jim.tools.progression import progression_report, workout_changes
+
+    user_id = _current_user_id()
+    _ensure_history(user_id)
+    today = _user_today(user_id)
+    week_ago, week_ahead = today - timedelta(days=7), today + timedelta(days=7)
+
+    readiness = readiness_read(user_id, today).model_dump(mode="json")
+    if all(readiness.get(k) is None for k in ("body_battery", "hrv", "sleep_hours")):
+        readiness["recovery_note"] = (
+            "last night's sleep/HRV hasn't synced yet — this verdict is load-only"
+        )
+
+    activities = activities_between(user_id, week_ago, today)
+    calendar = _best_effort(user_id, "calendar", calendar_between, week_ago, week_ahead)
+    library = _best_effort(user_id, "workout library", list_garmin_workouts)
+    sport_by_id = (
+        {w["workout_id"]: w["sport"] for w in library} if isinstance(library, list) else {}
+    )
+
+    # Planned sessions: Jim's own records, plus anything else on the Garmin
+    # calendar (scheduled by hand in Garmin Connect). Completed workouts drop
+    # off Garmin's calendar, so for past days Jim's records are the fuller
+    # source; a past item still on the calendar wasn't run from the watch.
+    plans: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in memory.planned_between(user_id, week_ago, week_ahead):
+        plan = row["plan"]
+        plans[(row["for_date"].isoformat(), row["workout_id"] or f"s{row['id']}")] = {
+            "date": row["for_date"].isoformat(), "title": plan.get("title", ""),
+            "kind": plan.get("kind", "other"), "workout_id": row["workout_id"],
+        }
+    on_calendar: set[tuple[str, str]] = set()
+    if isinstance(calendar, list):
+        for item in calendar:
+            key = (item["date"].isoformat(), item["workout_id"])
+            on_calendar.add(key)
+            plans.setdefault(key, {
+                "date": key[0], "title": item["title"], "workout_id": item["workout_id"],
+                "kind": KIND_BY_SPORT_KEY.get(sport_by_id.get(item["workout_id"], ""), "other"),
+            })
+
+    by_day: dict[str, list[ActivitySummary]] = {}
+    for a in activities:
+        by_day.setdefault(a["day"].isoformat(), []).append(ActivitySummary(
+            activity_id=str(a["activity_id"]), type=a["type"] or "unknown",
+            duration_min=float(a["duration_min"] or 0),
+        ))
+
+    reviewed, upcoming = [], []
+    for key in sorted(plans):
+        p = plans[key]
+        if p["date"] > today.isoformat():
+            if not isinstance(calendar, list) or key in on_calendar:
+                upcoming.append(p)
+            continue
+        actuals = by_day.get(p["date"], [])
+        kind = p["kind"] if p["kind"] in _VALID_KINDS else "other"
+        ok, note = adhered(
+            StructuredSession(for_date=date.fromisoformat(p["date"]), kind=kind,
+                              title=p["title"]),
+            actuals,
+        )
+        if ok:
+            status = "done"
+        elif p["date"] == today.isoformat() and not actuals:
+            status = "pending"
+        elif actuals:
+            status = "did_something_else"
+        else:
+            status = "missed"
+        reviewed.append({**p, "status": status, "note": note,
+                         **({"still_on_calendar": True} if key in on_calendar else {})})
+
+    counted = [r for r in reviewed if r["status"] != "pending"]
+    done = sum(r["status"] == "done" for r in counted)
+
+    sets = exercise_sets_since(user_id, today - timedelta(days=56))
+    planned_reps: dict[str, int] = {}
+    for row in memory.planned_between(user_id, today - timedelta(days=60), week_ahead):
+        for step in row["plan"].get("steps") or []:
+            name = _garmin_exercise_key(step.get("exercise") or "")
+            if name and step.get("reps"):
+                planned_reps[name] = int(step["reps"])
+
+    acwr = readiness.get("acwr")
+    hold = None
+    if readiness.get("status") in ("ease", "rest"):
+        hold = f"readiness says \"{readiness.get('headline')}\""
+    elif acwr is not None and acwr > 1.3:
+        hold = f"load is high this week (ACWR {acwr})"
+    progression = progression_report(sets, planned_reps, today, hold)
+
+    return {
+        "as_of": today.isoformat(),
+        "readiness": {k: readiness.get(k) for k in (
+            "status", "headline", "detail", "acwr", "body_battery", "hrv",
+            "sleep_hours", "recovery_note") if readiness.get(k) is not None},
+        "constraints": db.get_constraints(user_id) or "(none recorded — ask before loading legs)",
+        "last_7_days": {
+            "activities": [
+                {"date": a["day"].isoformat(), "type": a["type"],
+                 "minutes": round(float(a["duration_min"] or 0))}
+                for a in activities
+            ],
+            "planned_vs_done": reviewed,
+            "summary": (f"{done} of {len(counted)} planned sessions done as planned"
+                        if counted else "no planned sessions on record for the last 7 days"),
+        },
+        "next_7_days": upcoming if isinstance(calendar, list) else {
+            "unavailable": calendar.get("unavailable") if isinstance(calendar, dict) else None,
+            "from_jims_records": upcoming,
+        },
+        "progression": progression,
+        "suggested_changes": workout_changes(progression, reviewed, sets, readiness, today),
+    }
+
+
 # --- write: create/schedule/unschedule ---------------------------------------
 
 
@@ -600,6 +793,7 @@ def create_or_update_workout(
                 " retry schedule_workout with that id, or delete_workout it"
             )
         raise ToolError(f"{e}; {cleanup}") from e
+    _remember("create", memory.record_plan, user_id, ref.workout_id, session)
     return {**ref.model_dump(mode="json"), "title": session.title, "scheduled_for": day.isoformat()}
 
 
@@ -700,6 +894,7 @@ def update_workout(
     )
     with _garmin(user_id, f"update workout {wid}"):
         ref = update_garmin_workout(user_id, wid, session)
+    _remember("update", memory.update_plan, user_id, wid, session, session.for_date)
     return {**ref.model_dump(mode="json"), "title": title}
 
 
@@ -719,6 +914,7 @@ def schedule_workout(workout_id: str, on: str) -> dict:
     user_id = _current_user_id()
     with _garmin(user_id, f"schedule workout {wid} on {day}"):
         _schedule(user_id, wid, day)
+    _remember("schedule", _record_scheduled, user_id, wid, day)
     return {"ok": True, "workout_id": wid, "scheduled_for": day.isoformat()}
 
 
@@ -736,6 +932,8 @@ def unschedule_day(on: str, workout_id: str | None = None) -> dict:
     user_id = _current_user_id()
     with _garmin(user_id, f"clear the calendar on {day}"):
         removed = clear_schedule(user_id, day, wid)
+    _remember("unschedule", memory.cancel_plans, user_id,
+              [r["workout_id"] for r in removed], on=day)
     return {"ok": True, "date": day.isoformat(), "removed": removed}
 
 
@@ -752,6 +950,7 @@ def delete_workout(workout_id: str) -> dict:
     user_id = _current_user_id()
     with _garmin(user_id, f"delete workout {wid}"):
         delete_garmin_workout(user_id, wid)
+    _remember("delete", memory.cancel_plans, user_id, [wid], from_day=_user_today(user_id))
     return {"ok": True, "deleted": wid}
 
 

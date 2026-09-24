@@ -938,6 +938,61 @@ def _cluster_by(steps: list[Any], field: str) -> list[list[Any]]:
     return clusters
 
 
+# Garmin sportTypeKey -> SessionKind, the reverse of SPORT_TYPES (first
+# match wins where two kinds share a Garmin sport, e.g. hiking/other).
+KIND_BY_SPORT_KEY: dict[str, str] = {
+    "strength_training": "strength", "fitness_equipment": "strength",
+    "mobility": "mobility", "yoga": "yoga", "pilates": "pilates",
+    "cardio_training": "conditioning", "running": "running", "cycling": "cycling",
+    "swimming": "swimming", "walking": "walking", "hiit": "hiit",
+    "rucking": "rucking", "other": "other",
+}
+
+
+def plan_from_garmin_detail(detail: dict[str, Any], for_date: date) -> StructuredSession:
+    """A stored-plan view of an existing Garmin workout (e.g. a library
+    workout being scheduled), so plan-vs-actual and planned-reps lookups
+    work for workouts Claude didn't build itself. Steps inside repeat groups
+    are flattened with the group's round count as `sets`; `exercise` is
+    Garmin's exerciseName when it has one (e.g. GOBLET_SQUAT, the same key
+    logged sets use), else the step's description."""
+    from jim.schemas import ExerciseStep
+
+    steps: list[ExerciseStep] = []
+
+    def walk(items: list[dict[str, Any]], rounds: int) -> None:
+        for item in items or []:
+            if item.get("type") == "RepeatGroupDTO":
+                walk(item.get("workoutSteps") or [],
+                     rounds * int(item.get("numberOfIterations") or 1))
+                continue
+            if (item.get("stepType") or {}).get("stepTypeKey") == "rest":
+                continue
+            name = item.get("exerciseName") or item.get("description") or item.get("category")
+            if not name:
+                continue
+            key = (item.get("endCondition") or {}).get("conditionTypeKey")
+            value = item.get("endConditionValue")
+            steps.append(ExerciseStep(
+                exercise=name,
+                sets=rounds,
+                reps=int(value) if key == "reps" and value else None,
+                duration_sec=int(value) if key == "time" and value else None,
+                weight_kg=item.get("weightValue"),
+            ))
+
+    for segment in detail.get("workoutSegments") or []:
+        walk(segment.get("workoutSteps") or [], 1)
+    sport = (detail.get("sportType") or {}).get("sportTypeKey", "")
+    return StructuredSession(
+        for_date=for_date,
+        kind=KIND_BY_SPORT_KEY.get(sport, "other"),
+        title=detail.get("workoutName") or "",
+        steps=steps,
+        rationale_summary=detail.get("description") or "",
+    )
+
+
 def list_garmin_workouts(user_id: int) -> list[dict[str, str]]:
     """The athlete's existing Garmin workout library (named workouts they or
     Jim have saved). `get_workouts` paginates; 200 covers any real athlete's

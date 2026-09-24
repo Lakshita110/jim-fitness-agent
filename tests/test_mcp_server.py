@@ -137,28 +137,49 @@ def test_normalize_kind_rejects_unknown_values_with_a_clear_message():
         mcp_server_mod._normalize_kind("interpretive dance")
 
 
-def test_ensure_history_resyncs_today_every_call(monkeypatch):
-    """The nightly cron runs once, early evening — before that night's
-    sleep/HRV/body-battery data even exists. Without a re-sync on read,
-    today's stored row stays stale (nulls) for the rest of the day. A live
-    read is the moment worth paying one extra Garmin call for."""
-    calls = []
+def _patch_history_refresh(monkeypatch, store):
     from jim.jobs import nightly as nightly_mod
-
-    monkeypatch.setattr(nightly_mod, "_today_for_user", lambda uid: "2026-08-17")
-    monkeypatch.setattr(nightly_mod, "sync_today", lambda uid: calls.append(("sync_today", uid)))
-
     from jim.tools import garmin as garmin_mod
 
+    calls = []
+    monkeypatch.setattr(nightly_mod, "_today_for_user", lambda uid: "2026-08-17")
+    monkeypatch.setattr(nightly_mod, "sync_today", lambda uid: calls.append(("sync_today", uid)))
     monkeypatch.setattr(
         garmin_mod, "backfill_if_empty",
         lambda uid, today, days=90: calls.append(("backfill_if_empty", uid)),
     )
+    monkeypatch.setattr(db, "kv_get", lambda uid, key: store.get((uid, key)))
+    monkeypatch.setattr(db, "kv_set", lambda uid, key, v: store.__setitem__((uid, key), v))
+    return calls
 
+
+def test_ensure_history_resyncs_today(monkeypatch):
+    """The nightly cron runs once, early evening — before that night's
+    sleep/HRV/body-battery data even exists. Without a re-sync on read,
+    today's stored row stays stale (nulls) for the rest of the day."""
+    calls = _patch_history_refresh(monkeypatch, {})
     mcp_server_mod._ensure_history(42)
-
     assert ("backfill_if_empty", 42) in calls
     assert ("sync_today", 42) in calls
+
+
+def test_ensure_history_is_throttled_per_user(monkeypatch):
+    """One coaching turn calls several read tools back to back; re-fetching
+    the same day from Garmin for each was slow and courted rate limits."""
+    from datetime import UTC, datetime, timedelta
+
+    store = {}
+    calls = _patch_history_refresh(monkeypatch, store)
+    mcp_server_mod._ensure_history(42)
+    mcp_server_mod._ensure_history(42)
+    mcp_server_mod._ensure_history(43)  # another athlete isn't throttled by 42
+    assert calls.count(("sync_today", 42)) == 1
+    assert calls.count(("sync_today", 43)) == 1
+
+    stale = datetime.now(UTC) - mcp_server_mod.LIVE_SYNC_INTERVAL - timedelta(seconds=1)
+    store[(42, "live_sync_at")] = stale.isoformat()
+    mcp_server_mod._ensure_history(42)
+    assert calls.count(("sync_today", 42)) == 2
 
 
 def test_ensure_history_swallows_failures(monkeypatch):
@@ -172,5 +193,6 @@ def test_ensure_history_swallows_failures(monkeypatch):
         raise RuntimeError("garmin down")
 
     monkeypatch.setattr(nightly_mod, "sync_today", boom)
+    monkeypatch.setattr(db, "kv_get", lambda uid, key: None)
 
     mcp_server_mod._ensure_history(42)  # must not raise

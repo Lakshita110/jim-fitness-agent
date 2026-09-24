@@ -13,20 +13,46 @@ log = logging.getLogger(__name__)
 
 ADHERENCE_DURATION_TOLERANCE = 0.5  # actual within ±50% of proposed duration
 
-KIND_TO_ACTIVITY_TYPES = {
+# Planned kind -> Garmin activity typeKeys that count as doing it. Covers
+# every SessionKind the MCP tools accept; a kind missing here used to read as
+# "not done" forever (e.g. a planned walk). "other" accepts anything.
+KIND_TO_ACTIVITY_TYPES: dict[str, tuple[str, ...]] = {
     "strength": ("strength_training", "fitness_equipment"),
-    "conditioning": ("running", "cycling", "walking", "cardio", "elliptical", "swimming"),
-    "mobility": ("yoga", "stretching", "breathwork", "other"),
+    "conditioning": ("running", "treadmill_running", "cycling", "indoor_cycling",
+                     "walking", "cardio", "indoor_cardio", "elliptical", "swimming",
+                     "lap_swimming", "hiit", "stair_climbing", "indoor_rowing"),
+    "mobility": ("mobility", "yoga", "pilates", "stretching", "breathwork", "other"),
+    "running": ("running", "treadmill_running", "trail_running", "track_running",
+                "indoor_running"),
+    "cycling": ("cycling", "indoor_cycling", "road_biking", "mountain_biking",
+                "virtual_ride", "gravel_cycling"),
+    "swimming": ("swimming", "lap_swimming", "open_water_swimming"),
+    "walking": ("walking", "casual_walking", "speed_walking", "hiking"),
+    "hiking": ("hiking", "walking"),
+    "rucking": ("rucking", "hiking", "walking"),
+    "yoga": ("yoga", "mobility", "stretching"),
+    "pilates": ("pilates", "mobility"),
+    "hiit": ("hiit", "indoor_cardio", "cardio", "strength_training"),
 }
 
 
 def adhered(plan: StructuredSession, actuals: list[ActivitySummary]) -> tuple[bool, str]:
-    """Deterministic adherence check: right kind of activity, plausible duration."""
+    """Deterministic adherence check: right kind of activity, plausible duration.
+
+    A different kind of session that day is reported as not adhered but
+    named in the note ("did mobility instead") — the athlete moved, just
+    not what was planned, which is worth knowing differently from nothing."""
     if plan.kind == "rest":
         return (not actuals, "rest day" + (" violated" if actuals else " respected"))
-    expected_types = KIND_TO_ACTIVITY_TYPES.get(plan.kind, ())
-    matches = [a for a in actuals if a.type in expected_types]
+    expected_types = KIND_TO_ACTIVITY_TYPES.get(plan.kind)
+    matches = (
+        list(actuals) if expected_types is None
+        else [a for a in actuals if a.type in expected_types]
+    )
     if not matches:
+        if actuals:
+            others = ", ".join(sorted({a.type for a in actuals}))
+            return False, f"no {plan.kind} activity; did {others} instead"
         return False, f"no {plan.kind} activity recorded"
     total = sum(a.duration_min for a in matches)
     lo = plan.est_duration_min * (1 - ADHERENCE_DURATION_TOLERANCE)
@@ -44,7 +70,7 @@ def reconcile_day(user_id: int, day: date) -> None:
     with connect() as conn:
         row = conn.execute(
             "SELECT id, plan FROM suggestions WHERE user_id = %s AND for_date = %s"
-            " ORDER BY run_ts DESC LIMIT 1",
+            " AND NOT cancelled ORDER BY run_ts DESC LIMIT 1",
             (user_id, day),
         ).fetchone()
     if row is None:

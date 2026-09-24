@@ -400,3 +400,31 @@ def last_rotation_key(
         if row["template_key"] in rotation:
             return (row["template_key"], row["for_date"])
     return (None, None)
+
+
+# --- week overview reads -------------------------------------------------------
+
+
+def activities_between(user_id: int, start: date, end: date) -> list[dict[str, Any]]:
+    """Recorded Garmin activities in [start, end] (DB, synced nightly and on
+    live reads): day, activity_id, type, duration_min."""
+    from jim.db import connect
+
+    with connect() as conn:
+        return list(conn.execute(
+            "SELECT day, activity_id, type, duration_min FROM garmin_activities"
+            " WHERE user_id = %s AND day BETWEEN %s AND %s ORDER BY day",
+            (user_id, start, end),
+        ).fetchall())
+
+
+def exercise_sets_since(user_id: int, since: date) -> list[dict[str, Any]]:
+    """Every logged strength set since `since`, for progression analysis."""
+    from jim.db import connect
+
+    with connect() as conn:
+        return list(conn.execute(
+            "SELECT day, category, exercise_name, reps, weight_kg, duration_sec"
+            " FROM exercise_sets WHERE user_id = %s AND day >= %s ORDER BY day",
+            (user_id, since),
+        ).fetchall())
