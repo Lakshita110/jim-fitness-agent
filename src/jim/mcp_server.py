@@ -375,8 +375,13 @@ def create_or_update_workout(
     see jobs/nightly.py's cleanup_adapted_workouts. Don't use this for a
     workout meant to stick around in the athlete's library; that's a
     library edit on Garmin itself (create_or_update_workout is for a
-    single day's session, not a template)."""
+    single day's session, not a template).
+
+    The workout is created AND scheduled on `for_date` in one call — no
+    separate `schedule_workout` needed; calling it again would put a second
+    copy on the calendar."""
     from jim.tools.garmin import create_garmin_workout
+    from jim.tools.garmin import schedule_workout as schedule_garmin_workout
 
     user_id = _current_user_id()
     session = StructuredSession(
@@ -387,7 +392,8 @@ def create_or_update_workout(
         rationale_summary=notes,
     )
     ref = create_garmin_workout(user_id, session)
-    return ref.model_dump(mode="json")
+    schedule_garmin_workout(user_id, ref.workout_id, session.for_date)
+    return {**ref.model_dump(mode="json"), "scheduled_for": for_date}
 
 
 @mcp.tool

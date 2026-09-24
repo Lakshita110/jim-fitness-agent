@@ -78,7 +78,9 @@ if" or "do it," ask (see above) rather than treat silence or a vague
 `create_or_update_workout` builds a one-off adapted session — its title
 gets an automatic "Jim · " prefix and it's swept away automatically once
 its date has passed (or on request, via `cleanup_old_adapted_workouts`).
-Never use it for something meant to stick around.
+It also schedules the workout on `for_date` itself — don't follow it with
+`schedule_workout`, which would add a second copy. Never use it for
+something meant to stick around.
 
 `save_to_library` is the deliberate exception: it creates a real, permanent
 Garmin workout — no prefix, never swept, indistinguishable from something

@@ -65,3 +65,31 @@ def test_update_falls_back_to_the_given_id_if_response_omits_workoutId(monkeypat
     ref = garmin_mod.update_garmin_workout(2, "555", _session())
 
     assert ref.workout_id == "555"
+
+
+def test_create_or_update_workout_also_schedules_on_for_date(monkeypatch):
+    """Reported bug: for_date was set but the workout never landed on the
+    calendar — create_or_update_workout only created it. It now schedules
+    too, so the athlete doesn't need a second schedule_workout call."""
+    import jim.mcp_server as mcp_server_mod
+    from jim.schemas import WorkoutRef
+
+    monkeypatch.setattr(mcp_server_mod, "_current_user_id", lambda: 7)
+    monkeypatch.setattr(
+        garmin_mod, "create_garmin_workout", lambda uid, s: WorkoutRef(workout_id="123")
+    )
+    scheduled = []
+    monkeypatch.setattr(
+        garmin_mod, "schedule_workout", lambda uid, wid, on: scheduled.append((uid, wid, on))
+    )
+
+    tool = mcp_server_mod.create_or_update_workout
+    fn = getattr(tool, "fn", tool)
+    result = fn(
+        for_date="2026-09-25", title="Thursday", kind="strength",
+        steps=[mcp_server_mod.StepIn(exercise="Goblet squat", reps=8)],
+    )
+
+    assert scheduled == [(7, "123", date(2026, 9, 25))]
+    assert result["workout_id"] == "123"
+    assert result["scheduled_for"] == "2026-09-25"
