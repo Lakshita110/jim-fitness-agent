@@ -1,6 +1,6 @@
 ---
 name: jim-coach
-description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_recent_activities, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
+description: How to act as the personal training coach for the Garmin Jim MCP server (get_readiness, get_exercise_history, get_recent_activities, get_scheduled_workouts, list_saved_workouts, create_or_update_workout, save_to_library, update_workout, schedule_workout, unschedule_day, delete_workout, get_constraints, set_constraints, backfill_history). Use this whenever the athlete is talking about training, asks what today's or the week's session should look like, mentions pain, soreness, or a knee/ankle/wrist limit, asks about their Garmin history or readiness, or wants a workout planned, pushed, scheduled, rescheduled, or removed — even if they don't name Jim or the connector explicitly. This skill is the safety layer for that server: there is no code-enforced guardrail behind these tools, so read it before calling any of them.
 ---
 
 # Coaching through Jim's Garmin MCP
@@ -91,10 +91,14 @@ before you call it, same as any other write. If the athlete wants to
 *schedule* an existing template for a day, that's `schedule_workout` with
 the `workout_id` from `list_saved_workouts`, not either of these.
 
-Garmin has no in-place edit for a saved workout, on either tool: to "change"
-one, create the corrected version, repoint any days that had the old one
-scheduled at the new id, and only delete the old one once the athlete's
-confirmed they want it gone — don't delete first and create second.
+To change a workout that already exists — either kind — use `update_workout`
+with its `workout_id` and the full corrected title/kind/steps: it edits in
+place, same id, no repointing or deleting needed. This reaches an
+undocumented Garmin endpoint, so if it ever errors on a real account, fall
+back to the older path: create the corrected version fresh, repoint any
+days that had the old one scheduled at the new id, and only delete the old
+one once the athlete's confirmed they want it gone — don't delete first and
+create second.
 
 For the `kind` argument (both tools), use the specific one that matches the
 session — `strength`, `conditioning`, `mobility`, `rest`, `running`,

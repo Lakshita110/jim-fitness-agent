@@ -977,6 +977,36 @@ def create_garmin_workout(user_id: int, session: StructuredSession) -> WorkoutRe
     return WorkoutRef(workout_id=workout_id)
 
 
+def update_garmin_workout(user_id: int, workout_id: str, session: StructuredSession) -> WorkoutRef:
+    """Update an existing workout IN PLACE, instead of the create-new/
+    repoint-schedules/delete-old dance every write tool here otherwise has
+    to document as the only way to "edit" a workout.
+
+    garminconnect's own `upload_workout` always POSTs to the id-less
+    `/workout-service/workout` (create-only) — there's no wrapped method
+    for this. But `get_workout_by_id`/`delete_workout` both address
+    `/workout-service/workout/{id}`, and the underlying client exposes a
+    `put()` alongside its `post()`/`delete()` — this mirrors what Garmin
+    Connect's own website does when you edit a saved workout: PUT the full
+    workout JSON, with `workoutId` included in the body, to that same
+    per-id path. NOT in any official or reverse-engineered docs found; only
+    reachable because the client happens to expose the verb. Needs live
+    verification before being trusted as reliable — see mcp_server.py's
+    update_workout tool docstring for the fallback if this ever 400s/404s
+    on a real account."""
+    from jim.tools.exercise_match import semantic_resolver
+
+    api = client(user_id)
+    payload = build_strength_payload(session, resolver=semantic_resolver(user_id))
+    payload["workoutId"] = int(workout_id)
+    resp = api.client.put(
+        "connectapi", f"{api.garmin_workouts}/workout/{workout_id}", json=payload, api=True,
+    )
+    new_id = str((resp or {}).get("workoutId", workout_id))
+    log.info("updated garmin workout %s in place (%s)", new_id, session.title)
+    return WorkoutRef(workout_id=new_id)
+
+
 def schedule_workout(user_id: int, workout_id: str, on: date) -> None:
     api = client(user_id)
     api.schedule_workout(workout_id, on.isoformat())

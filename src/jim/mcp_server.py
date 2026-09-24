@@ -293,10 +293,11 @@ def create_or_update_workout(
     for_date: str, title: str, kind: str, steps: list[StepIn], notes: str = "",
 ) -> dict:
     """Create a new Garmin workout from structured steps (exercise, sets,
-    reps or duration_sec, weight_kg) and return its `workout_id`. Garmin has
-    no in-place edit for structured workouts — to "update" one, create a new
-    version and `schedule_workout` it in place of the old (re-scheduling a
-    day replaces what was there, it doesn't duplicate).
+    reps or duration_sec, weight_kg) and return its `workout_id`. To change
+    a workout that already exists (this one's output, or any other),
+    prefer `update_workout` — it edits in place by id rather than creating
+    a new one. Only fall back to re-scheduling a fresh version over the old
+    one if `update_workout` itself errors on a real account.
 
     `kind` is one of: strength, conditioning, mobility, rest, running,
     cycling, swimming, walking, hiking, yoga, pilates, hiit, rucking, other —
@@ -402,11 +403,11 @@ def save_to_library(title: str, kind: str, steps: list[StepIn], notes: str = "")
     silently; tell the athlete you're about to create a permanent library
     entry before you do it, same as any other write.
 
-    Garmin has no in-place edit for a saved workout. To change one that
-    already exists: call this again with the corrected steps (a new
-    workout_id comes back), point any days that had the old one scheduled
-    at the new id via schedule_workout, then delete_workout the old id once
-    you've confirmed the athlete wants it gone — don't delete it first.
+    Garmin has no OFFICIALLY documented in-place edit for a saved workout,
+    but `update_workout` reaches one anyway (see its docstring) — try that
+    first when the athlete wants to change something that already exists.
+    Only fall back to create-new/repoint/delete-old if `update_workout`
+    itself errors on a real account.
 
     Same `kind`/step rules as create_or_update_workout (see its docstring
     for the full list, the strength/mobility-only exercise matching, and
@@ -422,6 +423,51 @@ def save_to_library(title: str, kind: str, steps: list[StepIn], notes: str = "")
         rationale_summary=notes,
     )
     ref = create_garmin_workout(user_id, session)
+    return ref.model_dump(mode="json")
+
+
+@mcp.tool
+def update_workout(
+    workout_id: str, title: str, kind: str, steps: list[StepIn], notes: str = "",
+) -> dict:
+    """Update an EXISTING Garmin workout (by id) IN PLACE — same workout_id
+    after the call, watch/library entry updated rather than replaced. This
+    works for anything with a workout_id: a permanent library entry from
+    `save_to_library`, or a one-off from `create_or_update_workout`.
+
+    Reaches Garmin's undocumented per-id update endpoint (a PUT that mirrors
+    what Garmin Connect's own website does when you edit a saved workout —
+    no official or reverse-engineered docs describe this, found only by
+    noticing the underlying HTTP client exposes the verb). If this ever
+    errors on a real account, fall back to the older pattern instead: call
+    `save_to_library`/`create_or_update_workout` again with the corrected
+    steps (a new workout_id comes back), repoint any scheduled days at the
+    new id via `schedule_workout`, then `delete_workout` the old id once
+    confirmed — don't delete first.
+
+    You must pass the FULL desired workout every time — `title`, `kind`,
+    and the complete `steps` list — the same as creating one; there's no
+    partial/merge update. Same `kind`/step rules as create_or_update_workout
+    (see its docstring). Whatever prefix or lack of one the workout already
+    had (the "Jim · " one-off prefix, or a permanent title) is preserved
+    only if you pass the same `title` back — this tool does not add or
+    strip that prefix itself, so re-send the title exactly as read from
+    `list_saved_workouts`/`get_saved_workout` unless you're deliberately
+    renaming it.
+
+    Only call this on an explicit ask to change something that already
+    exists — never silently, same as any other write."""
+    from jim.tools.garmin import update_garmin_workout
+
+    user_id = _current_user_id()
+    session = StructuredSession(
+        for_date=date.today(),
+        kind=_normalize_kind(kind),
+        title=title,
+        steps=[ExerciseStep(**s.model_dump()) for s in steps],
+        rationale_summary=notes,
+    )
+    ref = update_garmin_workout(user_id, workout_id, session)
     return ref.model_dump(mode="json")
 
 
