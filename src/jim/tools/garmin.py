@@ -1024,39 +1024,72 @@ def delete_garmin_workout(user_id: int, workout_id: str) -> None:
     log.info("deleted garmin workout %s", workout_id)
 
 
-def get_scheduled_workouts(user_id: int, start: date, end: date) -> list[dict]:
-    """Workouts already on the real Garmin calendar in [start, end], for the
-    draft-sync (a user who scheduled directly in Garmin Connect, or before ever
-    using Jim, shouldn't see an empty plan just because Jim didn't propose it).
+def _calendar_month(api: Any, year: int, month: int) -> list[dict[str, Any]]:
+    """One month's calendarItems, or an error — never a silent empty list.
 
-    Each item: {"date": date, "workout_id": str, "title": str}. `get_scheduled_
-    workouts` is a per-month API, so a range spanning a month boundary means one
-    call per distinct (year, month) touched, merged and filtered back to the
-    exact range."""
-    api = client(user_id)
+    A well-formed response is a dict with a "calendarItems" list (possibly
+    empty: a genuinely quiet month). Anything else is retried once and then
+    raised, because treating a bad response as "nothing scheduled" is how
+    get_scheduled_workouts returned [] for weeks that had workouts on them
+    (seen live; not reproducible on demand, so the guard is structural)."""
+    for attempt in (1, 2):
+        raw = api.get_scheduled_workouts(year, month)
+        if isinstance(raw, dict) and isinstance(raw.get("calendarItems"), list):
+            return raw["calendarItems"]
+        log.warning("malformed calendar response for %s-%s (attempt %s): %r",
+                    year, month, attempt, raw if not isinstance(raw, dict) else sorted(raw))
+    raise RuntimeError(
+        f"Garmin returned an unreadable calendar for {year}-{month:02d} twice — try again"
+    )
+
+
+def _months(start: date, end: date) -> list[tuple[int, int]]:
     months: list[tuple[int, int]] = []
     y, m = start.year, start.month
     while (y, m) <= (end.year, end.month):
         months.append((y, m))
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return months
 
-    out: list[dict] = []
-    for year, month in months:
-        calendar = api.get_scheduled_workouts(year, month) or {}
-        for item in calendar.get("calendarItems", []):
-            if item.get("itemType") != "workout":
+
+def _scheduled_items(api: Any, start: date, end: date) -> list[dict[str, Any]]:
+    """Workout calendar entries in [start, end], each exactly once.
+
+    Garmin's month endpoint returns a full calendar GRID — the tail of the
+    previous month and head of the next ride along — so a range touching two
+    months sees boundary days twice. Deduplicated by the calendar entry's own
+    id (not by date+workout: scheduling one workout twice on a day really is
+    two entries)."""
+    seen: set[Any] = set()
+    out: list[dict[str, Any]] = []
+    for year, month in _months(start, end):
+        for item in _calendar_month(api, year, month):
+            if item.get("itemType") != "workout" or not item.get("date"):
                 continue
-            iso = item.get("date")
-            if not iso:
+            if not start <= date.fromisoformat(item["date"]) <= end:
                 continue
-            day = date.fromisoformat(iso)
-            if not (start <= day <= end):
+            key = item.get("id") or (item["date"], item.get("workoutId"), item.get("title"))
+            if key in seen:
                 continue
-            workout_id = item.get("workoutId")
-            if workout_id is None:
-                continue  # not every calendar item carries one; skip rather than guess
-            out.append({"date": day, "workout_id": str(workout_id), "title": item.get("title", "")})
+            seen.add(key)
+            out.append(item)
     return out
+
+
+def get_scheduled_workouts(user_id: int, start: date, end: date) -> list[dict]:
+    """Workouts on the real Garmin calendar in [start, end], sorted by date.
+
+    Each item: {"date": date, "workout_id": str, "title": str}. Entries
+    without a workoutId (not every calendar item carries one) are skipped
+    rather than guessed at."""
+    api = client(user_id)
+    out = [
+        {"date": date.fromisoformat(item["date"]), "workout_id": str(item["workoutId"]),
+         "title": item.get("title") or ""}
+        for item in _scheduled_items(api, start, end)
+        if item.get("workoutId") is not None
+    ]
+    return sorted(out, key=lambda r: r["date"])
 
 
 def clear_schedule(
@@ -1069,11 +1102,8 @@ def clear_schedule(
     untouched. Unscheduling removes the calendar entry only; the workout
     itself stays in the library."""
     api = client(user_id)
-    calendar = api.get_scheduled_workouts(on.year, on.month) or {}
     removed: list[dict[str, str]] = []
-    for item in calendar.get("calendarItems", []):
-        if item.get("itemType") != "workout" or item.get("date") != on.isoformat():
-            continue
+    for item in _scheduled_items(api, on, on):
         if workout_id is not None and str(item.get("workoutId")) != workout_id:
             continue
         api.unschedule_workout(item["id"])

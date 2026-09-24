@@ -276,3 +276,56 @@ def test_set_constraints_wipes_only_when_explicitly_allowed(monkeypatch):
     monkeypatch.setattr(db, "set_constraints", lambda uid, c: writes.append((uid, c)))
     _fn(m.set_constraints)(content="", allow_empty=True)
     assert writes == [(7, "")]
+
+
+# --- calendar reads (tools.garmin) ------------------------------------------------------
+
+
+class _GridApi:
+    """Garmin's month endpoint returns a calendar GRID: September's response
+    also carries early October, and October's carries late September."""
+
+    def __init__(self, responses=None):
+        self.responses = responses
+        self.calls = []
+
+    def get_scheduled_workouts(self, year, month):
+        self.calls.append(month)
+        if self.responses is not None:
+            return self.responses.pop(0)
+        boundary = [
+            {"itemType": "workout", "date": "2026-09-30", "id": 1, "workoutId": 10, "title": "A"},
+            {"itemType": "workout", "date": "2026-10-01", "id": 2, "workoutId": 20, "title": "B"},
+            # the same workout scheduled twice on one day: two real entries
+            {"itemType": "workout", "date": "2026-10-01", "id": 3, "workoutId": 20, "title": "B"},
+        ]
+        return {"calendarItems": boundary}
+
+
+def test_month_boundary_days_are_not_duplicated():
+    garmin_mod._clients[7] = _GridApi()
+    rows = garmin_mod.get_scheduled_workouts(7, date(2026, 9, 25), date(2026, 10, 5))
+    assert [(r["date"].day, r["workout_id"]) for r in rows] == [(30, "10"), (1, "20"), (1, "20")]
+
+
+def test_a_genuinely_empty_month_is_fine():
+    garmin_mod._clients[7] = _GridApi(responses=[{"calendarItems": []}])
+    assert garmin_mod.get_scheduled_workouts(7, date(2026, 9, 1), date(2026, 9, 30)) == []
+
+
+def test_a_malformed_month_is_retried_then_succeeds():
+    api = _GridApi(responses=[{}, {"calendarItems": [
+        {"itemType": "workout", "date": "2026-09-10", "id": 1, "workoutId": 5, "title": "X"}]}])
+    garmin_mod._clients[7] = api
+    rows = garmin_mod.get_scheduled_workouts(7, date(2026, 9, 1), date(2026, 9, 30))
+    assert [r["workout_id"] for r in rows] == ["5"]
+    assert api.calls == [9, 9]
+
+
+def test_a_persistently_malformed_month_errors_instead_of_reading_as_empty():
+    """The bug this guards: a bad response used to read as 'nothing
+    scheduled' — for get_scheduled_workouts a wrong answer, and for
+    unschedule_day a false 'removed nothing'."""
+    garmin_mod._clients[7] = _GridApi(responses=[None, {"unexpected": True}])
+    with pytest.raises(ToolError, match="unreadable calendar"):
+        _fn(m.get_scheduled_workouts)(start="2026-09-01", end="2026-09-30")

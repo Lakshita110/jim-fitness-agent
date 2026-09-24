@@ -29,7 +29,7 @@ lives in `skills/jim-coach/SKILL.md` instead of a code guardrail.
 |---|---|---|
 | `api/index.py`, `vercel.json` | Serverless entrypoint + deploy config | active |
 | `src/jim/app.py` | FastAPI app, `/health`, `/api/cron/nightly`, mounts the MCP app at `/mcp`, wires in `web/` routers | active |
-| `src/jim/mcp_server.py` | Garmin MCP — read history/readiness/calendar/workout library, write create/schedule/unschedule, get/set constraints. Bearer-token auth, re-resolved per call (see its docstring for why) | active |
+| `src/jim/mcp_server.py` | Garmin MCP — 16 tools: read (readiness, exercise/activity history, calendar, workout library), write (one-off `create_or_update_workout` that also schedules, permanent `save_to_library`, in-place `update_workout`, schedule/unschedule/delete), maintenance (backfill, cleanup), get/set constraints. Every tool validates input and translates Garmin failures into actionable `ToolError`s (`_parse_*`, `_garmin`). Bearer-token auth, re-resolved per call (see its docstring for why) | active |
 | `skills/jim-coach/SKILL.md` | Operating instructions for Claude when it's the one calling the MCP tools — constraints-first, data-grounded recommendations, never write without an explicit ask, `set_constraints` is a full replace. This is the safety layer now that there's no code guardrail | active |
 | `src/jim/web/{auth,garmin,constraints}_routes.py`, `deps.py` | Pure JSON API routes (no HTML). `auth_routes` also returns a bearer token on login/signup for non-browser clients (the MCP server) | active |
 | `src/jim/schemas.py` | Typed contracts, incl. `StructuredSession` | active |

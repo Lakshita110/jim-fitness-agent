@@ -265,8 +265,8 @@ def _ensure_history(user_id: int) -> None:
         sync_today(user_id)
     except Exception:
         # Best-effort — a Garmin hiccup here must not block the read the
-        # athlete actually asked for.
-        pass
+        # athlete actually asked for, but it must not vanish either.
+        log.warning("history refresh failed for user %s", user_id, exc_info=True)
 
 
 class StepIn(BaseModel):
@@ -339,7 +339,9 @@ def get_readiness(as_of: str | None = None) -> dict:
     computed it for this athlete's watch/history yet; that's real, not a
     bug, and just means less to go on from that source today. If Garmin
     itself errors on either, that field comes back as {"unavailable": ...}
-    instead of failing the whole read.
+    instead of failing the whole read. When body battery, HRV and sleep are
+    all missing (typically early morning, before the watch syncs), a
+    `recovery_note` says so — the verdict is then load-only.
 
     `as_of` defaults to today in the athlete's own timezone."""
     from jim.tools.garmin import get_training_readiness, get_training_status
@@ -349,6 +351,12 @@ def get_readiness(as_of: str | None = None) -> dict:
     _ensure_history(user_id)
     day = _parse_date(as_of, "as_of") if as_of else _user_today(user_id)
     result = readiness_read(user_id, day).model_dump(mode="json")
+    if all(result.get(k) is None for k in ("body_battery", "hrv", "sleep_hours")):
+        result["recovery_note"] = (
+            "no body battery/HRV/sleep for this day yet — usually the watch hasn't"
+            " synced last night's data to Garmin Connect. The verdict above is"
+            " load-only; ask how they slept, or check again after a sync."
+        )
     result["training_readiness"] = _best_effort(
         user_id, "training readiness", get_training_readiness, day,
     )
@@ -460,37 +468,6 @@ def get_saved_workout(workout_id: str) -> dict:
     with _garmin(user_id, f"read workout {wid}"):
         return _prune(get_garmin_workout_detail(user_id, wid))
 
-
-
-# --- TEMP: raw calendar probe, remove after use --
-
-
-@mcp.tool
-def _debug_calendar_raw(year: int, month: int, repeats: int = 3) -> list:
-    """TEMPORARY."""
-    import garminconnect
-
-    from jim.tools.garmin import client
-
-    api = client(_current_user_id())
-    out = []
-    for _ in range(repeats):
-        try:
-            raw = api.get_scheduled_workouts(year, month)
-            items = (raw or {}).get("calendarItems", []) if isinstance(raw, dict) else raw
-            out.append({
-                "type": type(raw).__name__,
-                "keys": sorted(raw)[:12] if isinstance(raw, dict) else None,
-                "n_items": len(items or []),
-                "workouts": sorted(
-                    f"{i.get('date')} {i.get('workoutId')} {i.get('title')}"
-                    for i in (items or []) if i.get("itemType") == "workout"
-                ),
-                "lib": garminconnect.__version__ if hasattr(garminconnect, "__version__") else "?",
-            })
-        except Exception as e:  # noqa: BLE001
-            out.append({"error": f"{type(e).__name__}: {e}"})
-    return out
 
 
 # --- write: create/schedule/unschedule ---------------------------------------
