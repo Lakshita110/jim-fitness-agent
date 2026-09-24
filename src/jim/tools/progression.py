@@ -32,6 +32,23 @@ from jim.tools.history import classify_muscle_group
 LB_PER_KG = 2.20462
 DEFAULT_REP_RANGE = (8, 12)
 _UNIT_TOLERANCE_KG = 0.05
+# Real isometric holds — only these progress by time. Anything else with a
+# duration and no reps is the watch not counting, not a hold.
+_HOLD_WORDS = ("PLANK", "WALL_SQUAT", "WALL_SIT", "HOLD", "ISOMETRIC", "DEAD_HANG", "HOLLOW")
+# Warm-up / mobility drills: logged, but loading them isn't a thing.
+_DRILL_WORDS = ("STRETCH", "CIRCLES", "SWINGS", "CHILDS_POSE", "CARDIO", "WARM_UP", "FOAM_ROLL")
+
+
+def is_drill(name: str) -> bool:
+    return any(w in name.upper() for w in _DRILL_WORDS)
+
+
+def _is_hold(name: str) -> bool:
+    return any(w in name.upper() for w in _HOLD_WORDS)
+
+
+def _range(lo: int, hi: int) -> str:
+    return str(hi) if lo == hi else f"{lo}-{hi}"
 
 
 # --- units ----------------------------------------------------------------------
@@ -124,6 +141,7 @@ def suggest_next(
     sessions: list[dict[str, Any]],
     rep_range: tuple[int, int] | None,
     hold_increases: str | None = None,
+    planned_hold: bool = False,
 ) -> dict[str, Any]:
     """One exercise's recommendation for next week. `sessions` oldest first.
     `hold_increases` is a reason string when this week's load/recovery says
@@ -131,17 +149,26 @@ def suggest_next(
     lo, hi = rep_range or DEFAULT_REP_RANGE
     last = sessions[-1]
     prev = sessions[-2] if len(sessions) > 1 else None
-    all_weights = [s["top_kg"] for s in sessions if s["top_kg"]]
-    unit = detect_unit(all_weights)
+    # Unit from the latest loaded session: an old kg-entered set mustn't
+    # outvote how the athlete loads it now. History renders per session.
+    loaded = [s["top_kg"] for s in sessions if s["top_kg"]]
+    unit = detect_unit(loaded[-1:])
+    rng = _range(lo, hi)
+    def _fmt_load(kg: float | None) -> str:
+        if not kg:
+            return "bodyweight"
+        u = detect_unit([kg])
+        return f"{to_unit(kg, u):g} {u}"
+
     base: dict[str, Any] = {
         "exercise": exercise,
         "group": classify_muscle_group(exercise),
         "unit": unit,
-        "target_reps": f"{lo}-{hi}" + ("" if rep_range else " (default — no planned reps found)"),
+        "target_reps": rng + ("" if rep_range else " (default — no planned reps found)"),
         "history": [
             {
                 "date": s["day"].isoformat(),
-                "load": f"{to_unit(s['top_kg'], unit):g} {unit}" if s["top_kg"] else "bodyweight",
+                "load": _fmt_load(s["top_kg"]),
                 "reps": s["reps"] or None,
                 **({"hold_sec": s["duration_sec"]} if s["duration_sec"] else {}),
             }
@@ -154,7 +181,10 @@ def suggest_next(
         if action == "increase" and hold_increases:
             action, reason = "hold", f"{reason} — but {hold_increases}, so hold this week"
             load = to_unit(last["top_kg"], unit) if last["top_kg"] else None
-            reps = reps and f"{lo}-{hi}"
+            reps = reps and rng
+        if base["group"] == "legs" and action in ("increase", "harder_variation"):
+            extra.setdefault(
+                "caution", "lower body — check knee/ankle constraints before increasing")
         return {
             **base,
             "action": action,
@@ -165,11 +195,13 @@ def suggest_next(
             **extra,
         }
 
-    # Timed holds (planks, wall sits by time): progress the hold.
+    # Timed holds (planks, wall sits by time): progress the hold. A duration
+    # on anything else just means the watch didn't count reps.
     if not last["reps"] and last["duration_sec"]:
         now = last["duration_sec"]
-        target = now + max(5, round(now * 0.1))
-        return result("add_time", f"held {now}s last session", reps=f"{target}s")
+        if planned_hold or (_is_hold(exercise) and now >= 10):
+            target = now + max(5, round(now * 0.1))
+            return result("add_time", f"held {now}s last session", reps=f"{target}s")
 
     reps_now = _median_reps(last)
     if reps_now is None:
@@ -180,30 +212,34 @@ def suggest_next(
 
     # Bodyweight: nothing to add but reps (or a harder variation).
     if not last["top_kg"]:
+        if reps_now < lo:
+            return result("hold",
+                          f"watch counted a median {reps_now:g} reps, under {rng} — likely"
+                          " miscounted; ask how many they actually did", reps=rng)
         if reps_now >= hi:
             return result("harder_variation",
-                          f"median {reps_now:g} reps is at the top of {lo}-{hi} with bodyweight"
+                          f"median {reps_now:g} reps is at the top of {rng} with bodyweight"
                           " — add load or a harder variation, if constraints allow",
-                          reps=f"{lo}-{hi}")
+                          reps=rng)
         return result("add_reps", f"median {reps_now:g} reps", reps=f"{min(int(reps_now) + 2, hi)}")
 
     load_now = to_unit(last["top_kg"], unit)
     step = load_step(load_now, unit)
     if reps_now >= hi:
         return result("increase",
-                      f"median {reps_now:g} reps at {load_now:g} {unit} hit the top of {lo}-{hi}",
-                      load=load_now + step, reps=f"{lo}-{hi}")
+                      f"median {reps_now:g} reps at {load_now:g} {unit} hit the top of {rng}",
+                      load=load_now + step, reps=rng)
     if reps_now < lo:
         prev_reps = _median_reps(prev) if prev else None
         same_load = prev is not None and prev["top_kg"] == last["top_kg"]
         if same_load and prev_reps is not None and prev_reps < lo:
             return result("deload",
                           f"below {lo} reps at {load_now:g} {unit} two sessions running",
-                          load=max(load_now - step, step), reps=f"{lo}-{hi}")
+                          load=max(load_now - step, step), reps=rng)
         return result("hold", f"median {reps_now:g} reps is under {lo} — repeat the load",
-                      load=load_now, reps=f"{lo}-{hi}")
-    return result("add_reps", f"median {reps_now:g} reps at {load_now:g} {unit}, inside {lo}-{hi}",
-                  load=load_now, reps=f"{min(int(reps_now) + 1, hi)}-{hi}")
+                      load=load_now, reps=rng)
+    return result("add_reps", f"median {reps_now:g} reps at {load_now:g} {unit}, inside {rng}",
+                  load=load_now, reps=_range(min(int(reps_now) + 1, hi), hi))
 
 
 def is_stalled(sessions: list[dict[str, Any]]) -> bool:
@@ -221,21 +257,27 @@ def is_stalled(sessions: list[dict[str, Any]]) -> bool:
 
 def progression_report(
     rows: list[dict[str, Any]],
-    planned_reps: dict[str, int],
+    planned: dict[str, Any],
     as_of: date,
     hold_increases: str | None,
     recent_days: int = 21,
 ) -> list[dict[str, Any]]:
     """Suggestions for every exercise trained in the last `recent_days`,
-    most recently trained first. `planned_reps` maps a Garmin exercise name
-    (e.g. GOBLET_SQUAT) to the reps the athlete's plans ask for."""
+    most recently trained first. `planned` maps a Garmin exercise name
+    (e.g. GOBLET_SQUAT) to {"reps": int|None, "duration_sec": int|None} from
+    the athlete's plans (a bare int is read as reps). Warm-up/mobility drills
+    are skipped (callers count them with `is_drill`)."""
     out = []
     for name, sessions in summarize_sessions(rows).items():
-        if sessions[-1]["day"] < as_of - timedelta(days=recent_days):
+        if sessions[-1]["day"] < as_of - timedelta(days=recent_days) or is_drill(name):
             continue
-        target = planned_reps.get(name)
+        p = planned.get(name)
+        if not isinstance(p, dict):
+            p = {"reps": p, "duration_sec": None}
+        target = p.get("reps")
         rep_range = (max(target - 4, 1), target) if target else None
-        entry = suggest_next(name, sessions, rep_range, hold_increases)
+        entry = suggest_next(name, sessions, rep_range, hold_increases,
+                             planned_hold=bool(p.get("duration_sec")) and not target)
         if is_stalled(sessions):
             entry["stalled"] = True
         out.append(entry)

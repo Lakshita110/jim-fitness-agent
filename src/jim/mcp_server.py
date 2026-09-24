@@ -543,10 +543,15 @@ def get_week_overview() -> dict:
     When the week's load is high, increases are already turned into holds."""
     from jim.jobs.reconcile import adhered
     from jim.schemas import ActivitySummary
-    from jim.tools.garmin import KIND_BY_SPORT_KEY, list_garmin_workouts
+    from jim.tools.garmin import (
+        KIND_BY_SPORT_KEY,
+        get_garmin_workout_detail,
+        list_garmin_workouts,
+        plan_from_garmin_detail,
+    )
     from jim.tools.garmin import get_scheduled_workouts as calendar_between
     from jim.tools.history import activities_between, exercise_sets_since, readiness_read
-    from jim.tools.progression import progression_report, workout_changes
+    from jim.tools.progression import is_drill, progression_report, workout_changes
 
     user_id = _current_user_id()
     _ensure_history(user_id)
@@ -623,12 +628,30 @@ def get_week_overview() -> dict:
     done = sum(r["status"] == "done" for r in counted)
 
     sets = exercise_sets_since(user_id, today - timedelta(days=56))
-    planned_reps: dict[str, int] = {}
-    for row in memory.planned_between(user_id, today - timedelta(days=60), week_ahead):
-        for step in row["plan"].get("steps") or []:
+    # Targets per exercise: Jim's plan records, then the calendar's library
+    # workouts (their real reps/holds), so the ranges reflect the program.
+    step_lists = [row["plan"].get("steps") or [] for row in
+                  memory.planned_between(user_id, today - timedelta(days=60), week_ahead)]
+    recorded = {r["workout_id"] for r in memory.planned_between(user_id, week_ago, week_ahead)}
+    for wid in sorted({i["workout_id"] for i in calendar if i["workout_id"] not in recorded}
+                      if isinstance(calendar, list) else set())[:8]:
+        detail = _best_effort(user_id, "workout detail", get_garmin_workout_detail, wid)
+        if isinstance(detail, dict) and "unavailable" not in detail:
+            try:
+                plan = plan_from_garmin_detail(detail, today)
+                step_lists.append([st.model_dump() for st in plan.steps])
+            except Exception:  # noqa: BLE001 — targets are a nicety
+                log.warning("could not read targets from workout %s", wid, exc_info=True)
+    planned: dict[str, dict[str, int | None]] = {}
+    for steps in step_lists:
+        for step in steps:
             name = _garmin_exercise_key(step.get("exercise") or "")
-            if name and step.get("reps"):
-                planned_reps[name] = int(step["reps"])
+            if name and (step.get("reps") or step.get("duration_sec")):
+                planned[name] = {"reps": int(step["reps"]) if step.get("reps") else None,
+                                 "duration_sec": step.get("duration_sec")}
+    skipped = sorted({(r.get("exercise_name") or "") for r in sets
+                      if is_drill(r.get("exercise_name") or "")
+                      and r["day"] >= today - timedelta(days=21)})
 
     acwr = readiness.get("acwr")
     hold = None
@@ -636,7 +659,7 @@ def get_week_overview() -> dict:
         hold = f"readiness says \"{readiness.get('headline')}\""
     elif acwr is not None and acwr > 1.3:
         hold = f"load is high this week (ACWR {acwr})"
-    progression = progression_report(sets, planned_reps, today, hold)
+    progression = progression_report(sets, planned, today, hold)
 
     return {
         "as_of": today.isoformat(),
@@ -659,6 +682,7 @@ def get_week_overview() -> dict:
             "from_jims_records": upcoming,
         },
         "progression": progression,
+        **({"skipped_warmup_drills": skipped} if skipped else {}),
         "suggested_changes": workout_changes(progression, reviewed, sets, readiness, today),
     }
 

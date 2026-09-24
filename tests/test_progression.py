@@ -189,3 +189,49 @@ def test_changes_flag_misses_load_and_quiet_muscle_groups():
 def test_low_load_suggests_room_to_add():
     changes = p.workout_changes([], [], [], {"status": "push", "acwr": 0.6}, D)
     assert any("room for an extra session" in c for c in changes)
+
+
+# --- quality fixes found on real data ----------------------------------------------------
+
+
+def test_unit_follows_the_latest_session_not_old_history():
+    """An old 2.5 kg session outvoted a current 12.5 lb one -> '5.5 kg'."""
+    s = _suggest([(2.5, [10]), (2.5, [10]), (5.69, [12, 12])], name="BENCH_PRESS")
+    assert s["unit"] == "lb" and s["next_load"] == "15 lb"
+    assert s["history"][0]["load"] == "2.5 kg"
+
+
+def test_short_durations_on_non_holds_are_not_holds():
+    rows = _sets(D, "SHOULDER_CIRCLES", [None], duration=2) + _sets(
+        D, "FARMERS_CARRY", [None], weight=9.06, duration=6)
+    sessions = p.summarize_sessions(rows)
+    for name in ("SHOULDER_CIRCLES", "FARMERS_CARRY"):
+        s = p.suggest_next(name, sessions[name], None)
+        assert s["action"] == "hold" and "ask" in s["reason"]
+
+
+def test_planned_hold_progresses_by_time():
+    rows = _sets(D, "SIDE_BRIDGE", [None], duration=30)
+    (e,) = p.progression_report(rows, {"SIDE_BRIDGE": {"reps": None, "duration_sec": 30}},
+                                D, None)
+    assert e["action"] == "add_time"
+
+
+def test_warmup_drills_are_left_out():
+    rows = _sets(D, "ARM_CIRCLES", [10]) + _sets(D, "ROPE_PRESSDOWN", [12], 9.06)
+    assert [e["exercise"] for e in p.progression_report(rows, {}, D, None)] == ["ROPE_PRESSDOWN"]
+
+
+def test_bodyweight_below_range_holds_as_a_likely_miscount():
+    s = _suggest([(None, [5, 5, 6])], name="CLAM_SHELLS")
+    assert s["action"] == "hold" and "miscounted" in s["reason"]
+
+
+def test_lower_body_increases_carry_a_caution():
+    s = _suggest([(47.0, [12, 12])], name="LEG_PRESS")
+    assert s["action"] == "increase" and "knee/ankle" in s["caution"]
+
+
+def test_single_rep_target_prints_as_one_number():
+    s = _suggest([(9.06, [10, 10])], rep_range=(12, 12))
+    assert s["target_reps"] == "12"
